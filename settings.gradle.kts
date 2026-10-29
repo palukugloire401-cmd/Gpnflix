@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "GpnFlix"
 
 include(":app")
+include(":application")
