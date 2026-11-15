@@ -3,12 +3,10 @@ name: Android CI - GpnFlix
 on:
   push:
     branches:
-      - main
-      - master
+      - "**"
   pull_request:
     branches:
-      - main
-      - master
+      - "**"
   workflow_dispatch:
 
 jobs:
@@ -26,8 +24,18 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configurer le SDK Android
+        uses: android-actions/setup-android@v4
+        with:
+          packages: >
+            platform-tools
+            platforms;android-36
+            build-tools;36.0.0
+
+      - name: Accepter les licences et installer API 36.1 si disponible
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-36.1" || true
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
