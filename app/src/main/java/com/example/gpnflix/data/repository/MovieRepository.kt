@@ -1,25 +1,32 @@
 package com.example.gpnflix.data.repository
 
 import android.content.Context
+import android.net.Uri
 import com.example.gpnflix.data.local.DownloadDao
 import com.example.gpnflix.data.local.DownloadEntity
+import com.example.gpnflix.data.local.DownloadStatus
 import com.example.gpnflix.data.local.FavoriteDao
 import com.example.gpnflix.data.local.FavoriteEntity
 import com.example.gpnflix.data.local.GpnFlixDatabase
+import com.example.gpnflix.data.local.OfflineDownloadManager
+import com.example.gpnflix.data.local.VideoDownloadWithMetadata
+import com.example.gpnflix.data.local.VideoMetadataDao
 import com.example.gpnflix.data.local.WatchHistoryDao
 import com.example.gpnflix.data.local.WatchHistoryEntity
+import com.example.gpnflix.data.local.toVideoMetadataEntity
 import com.example.gpnflix.data.model.CategoryItem
 import com.example.gpnflix.data.model.Movie
 import com.example.gpnflix.data.model.UpcomingMovie
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import java.io.File
 
 class MovieRepository(
+    private val videoMetadataDao: VideoMetadataDao,
     private val watchHistoryDao: WatchHistoryDao,
     private val favoriteDao: FavoriteDao,
     private val downloadDao: DownloadDao,
-    private val context: Context
+    private val downloadManager: OfflineDownloadManager
 ) {
 
     // 100% Legal, Open Source, Creative Commons, and Public Domain Catalogue
@@ -289,6 +296,33 @@ class MovieRepository(
         )
     )
 
+    // Room Video Metadata initialization & reactive queries
+    suspend fun ensureCatalogueSeeded() {
+        videoMetadataDao.upsertAll(catalogue.map { it.toVideoMetadataEntity() })
+        downloadManager.reconcileOnStartup()
+    }
+
+    fun observeAllVideos(): Flow<List<Movie>> =
+        videoMetadataDao.observeAllVideos().map { list ->
+            if (list.isEmpty()) catalogue else list.map { it.toMovie() }
+        }
+
+    fun observeVideoById(id: String): Flow<Movie?> =
+        videoMetadataDao.observeVideoById(id).map { it?.toMovie() }
+
+    fun searchVideosInRoom(
+        query: String,
+        categoryFilter: String,
+        yearFilter: Int?,
+        languageFilter: String
+    ): Flow<List<Movie>> =
+        videoMetadataDao.searchVideos(
+            query = query,
+            category = categoryFilter,
+            year = yearFilter,
+            language = languageFilter
+        ).map { list -> list.map { it.toMovie() } }
+
     fun getAllMovies(): List<Movie> = catalogue
 
     fun getFeaturedMovies(): List<Movie> = catalogue.filter { it.isFeatured }
@@ -368,39 +402,41 @@ class MovieRepository(
         }
     }
 
-    // Room Downloads delegates
+    // Room Downloads & Offline Storage delegates
     fun getAllDownloads(): Flow<List<DownloadEntity>> = downloadDao.getAllDownloads()
+    fun observeDownloadsWithMetadata(): Flow<List<VideoDownloadWithMetadata>> = downloadDao.observeDownloadsWithMetadata()
+    fun observeTotalDownloadedBytes(): Flow<Long> = downloadDao.observeTotalDownloadedBytes()
     fun observeDownload(movieId: String): Flow<DownloadEntity?> = downloadDao.observeDownload(movieId)
 
-    suspend fun startDownload(movie: Movie) {
-        val destFile = File(context.filesDir, "downloads/${movie.id}.mp4")
-        destFile.parentFile?.mkdirs()
-        if (!destFile.exists()) {
-            destFile.createNewFile()
-        }
-        val entity = DownloadEntity(
-            movieId = movie.id,
-            title = movie.title,
-            posterUrl = movie.posterUrl,
-            localFilePath = destFile.absolutePath,
-            fileSizeBytes = (movie.durationMinutes * 15L * 1024 * 1024), // Realistic ~15MB/min
-            downloadedBytes = (movie.durationMinutes * 15L * 1024 * 1024),
-            status = "COMPLETED",
-            progressPercent = 100,
-            downloadedTimestamp = System.currentTimeMillis()
-        )
-        downloadDao.saveDownload(entity)
+    suspend fun startDownload(movie: Movie, quality: String = "Auto (1080p)", wifiOnly: Boolean = false) {
+        // Ensure video metadata is stored locally in Room before queueing download
+        videoMetadataDao.upsertVideo(movie.toVideoMetadataEntity())
+        downloadManager.startOrResumeDownload(movie, quality = quality, wifiOnly = wifiOnly)
+    }
+
+    suspend fun pauseDownload(movieId: String) {
+        downloadManager.pauseDownload(movieId)
+    }
+
+    suspend fun resumeDownload(movieId: String, wifiOnly: Boolean = false) {
+        val movie = videoMetadataDao.getVideoById(movieId)?.toMovie() ?: getMovieById(movieId) ?: return
+        val existingQuality = downloadDao.getDownload(movieId)?.quality ?: "Auto (1080p)"
+        downloadManager.startOrResumeDownload(movie, quality = existingQuality, wifiOnly = wifiOnly)
     }
 
     suspend fun deleteDownload(movieId: String) {
-        val entity = downloadDao.getDownload(movieId)
-        if (entity != null) {
-            val file = File(entity.localFilePath)
-            if (file.exists()) {
-                file.delete()
-            }
-            downloadDao.deleteDownload(movieId)
-        }
+        downloadManager.deleteDownload(movieId)
+    }
+
+    suspend fun clearAllDownloads() {
+        downloadManager.clearAllDownloads()
+    }
+
+    suspend fun resolveOfflineUri(movieId: String): Uri? {
+        val entity = downloadDao.getDownload(movieId) ?: return null
+        if (entity.status != DownloadStatus.COMPLETED) return null
+        val file = File(entity.localFilePath)
+        return if (file.exists() && file.length() > 0L) Uri.fromFile(file) else null
     }
 
     companion object {
@@ -409,12 +445,18 @@ class MovieRepository(
 
         fun getInstance(context: Context): MovieRepository {
             return INSTANCE ?: synchronized(this) {
-                val db = GpnFlixDatabase.getDatabase(context)
+                val appContext = context.applicationContext
+                val db = GpnFlixDatabase.getDatabase(appContext)
+                val downloadManager = OfflineDownloadManager(
+                    context = appContext,
+                    downloadDao = db.downloadDao()
+                )
                 val instance = MovieRepository(
+                    videoMetadataDao = db.videoMetadataDao(),
                     watchHistoryDao = db.watchHistoryDao(),
                     favoriteDao = db.favoriteDao(),
                     downloadDao = db.downloadDao(),
-                    context = context.applicationContext
+                    downloadManager = downloadManager
                 )
                 INSTANCE = instance
                 instance

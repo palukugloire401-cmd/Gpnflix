@@ -67,9 +67,11 @@ fun HomeScreen(
 ) {
     val continueWatching by viewModel.continueWatching.collectAsStateWithLifecycle()
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
-    val allMovies = viewModel.allMovies
-    val featuredMovie = viewModel.featuredMovies.firstOrNull() ?: allMovies.first()
-    val trendingMovies = viewModel.trendingMovies
+    val allMovies by viewModel.moviesState.collectAsStateWithLifecycle()
+    val featuredMovie = remember(allMovies) {
+        allMovies.firstOrNull { it.isFeatured } ?: allMovies.first()
+    }
+    val trendingMovies = remember(allMovies) { allMovies.filter { it.isTrending } }
     val animationMovies = remember(allMovies) { allMovies.filter { it.category == "Animation" } }
     val classicMovies = remember(allMovies) { allMovies.filter { it.category == "Classiques" } }
     val documentaryMovies = remember(allMovies) { allMovies.filter { it.category == "Documentaire" } }

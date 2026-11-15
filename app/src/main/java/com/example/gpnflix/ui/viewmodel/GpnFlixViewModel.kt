@@ -6,12 +6,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.gpnflix.data.local.DownloadEntity
-import com.example.gpnflix.data.local.FavoriteEntity
+import com.example.gpnflix.data.local.VideoDownloadWithMetadata
 import com.example.gpnflix.data.local.WatchHistoryEntity
 import com.example.gpnflix.data.model.CategoryItem
 import com.example.gpnflix.data.model.Movie
 import com.example.gpnflix.data.model.UpcomingMovie
 import com.example.gpnflix.data.repository.MovieRepository
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -38,7 +39,7 @@ data class UserSettingsState(
     val defaultQuality: String = "Auto (1080p)",
     val language: String = "Français",
     val autoPlayNext: Boolean = true,
-    val downloadWifiOnly: Boolean = true
+    val downloadWifiOnly: Boolean = false
 )
 
 class GpnFlixViewModel(
@@ -46,8 +47,16 @@ class GpnFlixViewModel(
     private val repository: MovieRepository
 ) : AndroidViewModel(application) {
 
-    // Catalogue
+    // Synchronous catalogue snapshot + Room-backed reactive video metadata flow
     val allMovies: List<Movie> = repository.getAllMovies()
+
+    val moviesState: StateFlow<List<Movie>> = repository.observeAllVideos()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = allMovies
+        )
+
     val featuredMovies: List<Movie> = repository.getFeaturedMovies()
     val trendingMovies: List<Movie> = repository.getTrendingMovies()
     val categories: List<CategoryItem> = repository.getCategories()
@@ -60,9 +69,9 @@ class GpnFlixViewModel(
     private val _searchResults = MutableStateFlow<List<Movie>>(allMovies)
     val searchResults: StateFlow<List<Movie>> = _searchResults.asStateFlow()
 
-    // Continue watching flow
+    // Continue watching flow (Room WatchHistory joined with Room VideoMetadata)
     val continueWatching: StateFlow<List<ContinueWatchingItem>> = repository.getContinueWatching()
-        .combine(MutableStateFlow(allMovies)) { historyList, movies ->
+        .combine(moviesState) { historyList, movies ->
             historyList.mapNotNull { hist ->
                 val movie = movies.find { it.id == hist.movieId }
                 movie?.let { ContinueWatchingItem(it, hist) }
@@ -75,7 +84,7 @@ class GpnFlixViewModel(
 
     // Full Watch History flow
     val watchHistory: StateFlow<List<ContinueWatchingItem>> = repository.getAllHistory()
-        .combine(MutableStateFlow(allMovies)) { historyList, movies ->
+        .combine(moviesState) { historyList, movies ->
             historyList.mapNotNull { hist ->
                 val movie = movies.find { it.id == hist.movieId }
                 movie?.let { ContinueWatchingItem(it, hist) }
@@ -88,7 +97,7 @@ class GpnFlixViewModel(
 
     // Favorites flow
     val favorites: StateFlow<List<Movie>> = repository.getAllFavorites()
-        .combine(MutableStateFlow(allMovies)) { favList, movies ->
+        .combine(moviesState) { favList, movies ->
             favList.mapNotNull { fav ->
                 movies.find { it.id == fav.movieId }
             }
@@ -98,12 +107,27 @@ class GpnFlixViewModel(
             initialValue = emptyList()
         )
 
-    // Downloads flow
+    // Downloads flows backed by Room
     val downloads: StateFlow<List<DownloadEntity>> = repository.getAllDownloads()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
+        )
+
+    val downloadsWithMetadata: StateFlow<List<VideoDownloadWithMetadata>> =
+        repository.observeDownloadsWithMetadata()
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = emptyList()
+            )
+
+    val totalDownloadedBytes: StateFlow<Long> = repository.observeTotalDownloadedBytes()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = 0L
         )
 
     // User settings
@@ -115,6 +139,9 @@ class GpnFlixViewModel(
     val selectedMovie: StateFlow<Movie?> = _selectedMovie.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            repository.ensureCatalogueSeeded()
+        }
         performSearch()
     }
 
@@ -123,8 +150,11 @@ class GpnFlixViewModel(
     }
 
     fun selectMovieById(id: String) {
-        _selectedMovie.value = repository.getMovieById(id)
+        _selectedMovie.value = moviesState.value.find { it.id == id } ?: repository.getMovieById(id)
     }
+
+    fun observeDownload(movieId: String): Flow<DownloadEntity?> =
+        repository.observeDownload(movieId)
 
     fun isFavorite(movieId: String): StateFlow<Boolean> {
         return repository.isFavorite(movieId).stateIn(
@@ -164,13 +194,39 @@ class GpnFlixViewModel(
 
     fun downloadMovie(movie: Movie) {
         viewModelScope.launch {
-            repository.startDownload(movie)
+            val settings = _userSettings.value
+            repository.startDownload(
+                movie = movie,
+                quality = settings.defaultQuality,
+                wifiOnly = settings.downloadWifiOnly
+            )
+        }
+    }
+
+    fun pauseDownload(movieId: String) {
+        viewModelScope.launch {
+            repository.pauseDownload(movieId)
+        }
+    }
+
+    fun resumeDownload(movieId: String) {
+        viewModelScope.launch {
+            repository.resumeDownload(
+                movieId = movieId,
+                wifiOnly = _userSettings.value.downloadWifiOnly
+            )
         }
     }
 
     fun deleteDownload(movieId: String) {
         viewModelScope.launch {
             repository.deleteDownload(movieId)
+        }
+    }
+
+    fun clearAllDownloads() {
+        viewModelScope.launch {
+            repository.clearAllDownloads()
         }
     }
 

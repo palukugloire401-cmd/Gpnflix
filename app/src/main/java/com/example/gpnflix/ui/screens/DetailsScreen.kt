@@ -26,13 +26,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -65,11 +67,13 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.gpnflix.data.local.DownloadStatus
 import com.example.gpnflix.data.local.WatchHistoryEntity
 import com.example.gpnflix.data.model.Movie
 import com.example.gpnflix.ui.components.MovieCard
 import com.example.gpnflix.ui.components.SectionHeader
 import com.example.gpnflix.ui.viewmodel.GpnFlixViewModel
+import java.util.Locale
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -85,8 +89,7 @@ fun DetailsScreen(
 
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
     val isFav = favorites.any { it.id == movie.id }
-    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
-    val isDownloaded = downloads.any { it.movieId == movie.id }
+    val downloadState by viewModel.observeDownload(movie.id).collectAsStateWithLifecycle(initialValue = null)
 
     val savedHistory by produceState<WatchHistoryEntity?>(initialValue = null, key1 = movie.id) {
         value = viewModel.getSavedProgress(movie.id).let { pos ->
@@ -94,8 +97,9 @@ fun DetailsScreen(
         }
     }
 
-    val similarMovies = remember(movie, viewModel.allMovies) {
-        viewModel.allMovies
+    val allMovies by viewModel.moviesState.collectAsStateWithLifecycle()
+    val similarMovies = remember(movie, allMovies) {
+        allMovies
             .filter { it.id != movie.id && (it.category == movie.category || it.genres.any { g -> movie.genres.contains(g) }) }
             .take(6)
     }
@@ -323,7 +327,7 @@ fun DetailsScreen(
                                     color = MaterialTheme.colorScheme.onBackground
                                 )
                                 Text(
-                                    text = "Dernière position : environ ${minutesWatched} min",
+                                    text = "Dernière position : environ $minutesWatched min",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -333,7 +337,7 @@ fun DetailsScreen(
                 }
             }
 
-            // Action Buttons (Play & Download)
+            // Action Buttons (Play & Offline Download with live Room status)
             item {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                     Button(
@@ -351,7 +355,11 @@ fun DetailsScreen(
                         Icon(imageVector = Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(24.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (savedHistory != null && savedHistory!!.progressMs > 5000L) "Reprendre la lecture" else "Regarder maintenant",
+                            text = when {
+                                downloadState?.isCompleted == true -> "Lire hors-ligne"
+                                savedHistory != null && savedHistory!!.progressMs > 5000L -> "Reprendre la lecture"
+                                else -> "Regarder maintenant"
+                            },
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                     }
@@ -362,28 +370,47 @@ fun DetailsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        // Download button
-                        FilledTonalButton(
-                            onClick = {
-                                if (isDownloaded) {
-                                    viewModel.deleteDownload(movie.id)
-                                } else {
-                                    viewModel.downloadMovie(movie)
-                                }
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(46.dp)
-                                .testTag("details_download_button"),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (isDownloaded) Icons.Filled.Check else Icons.Filled.Download,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(text = if (isDownloaded) "Téléchargé" else "Télécharger")
+                        if (movie.isDownloadable) {
+                            val dl = downloadState
+                            FilledTonalButton(
+                                onClick = {
+                                    when (dl?.status) {
+                                        null -> viewModel.downloadMovie(movie)
+                                        DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING -> viewModel.pauseDownload(movie.id)
+                                        DownloadStatus.PAUSED, DownloadStatus.FAILED -> viewModel.resumeDownload(movie.id)
+                                        DownloadStatus.COMPLETED -> viewModel.deleteDownload(movie.id)
+                                    }
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp)
+                                    .testTag("details_download_button"),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = when (dl?.status) {
+                                        DownloadStatus.COMPLETED -> Icons.Filled.DownloadDone
+                                        DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING -> Icons.Filled.Pause
+                                        DownloadStatus.FAILED -> Icons.Filled.Refresh
+                                        DownloadStatus.PAUSED -> Icons.Filled.PlayArrow
+                                        else -> Icons.Filled.Download
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = when (dl?.status) {
+                                        DownloadStatus.QUEUED -> "En file..."
+                                        DownloadStatus.DOWNLOADING -> "Pause (${dl.progressPercent}%)"
+                                        DownloadStatus.PAUSED -> "Reprendre (${dl.progressPercent}%)"
+                                        DownloadStatus.FAILED -> "Réessayer"
+                                        DownloadStatus.COMPLETED -> "Hors-ligne ✓"
+                                        else -> "Télécharger"
+                                    },
+                                    maxLines = 1
+                                )
+                            }
                         }
 
                         // Add to Favorites button
@@ -403,6 +430,83 @@ fun DetailsScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(text = if (isFav) "Dans ma liste" else "Ma Liste")
+                        }
+                    }
+
+                    // Active or Paused or Failed Download Status Card
+                    downloadState?.takeIf { !it.isCompleted }?.let { dl ->
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("details_download_progress_card"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (dl.isFailed) {
+                                            Icon(
+                                                imageVector = Icons.Filled.ErrorOutline,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                        }
+                                        Text(
+                                            text = when (dl.status) {
+                                                DownloadStatus.QUEUED -> "Préparation du téléchargement..."
+                                                DownloadStatus.DOWNLOADING -> "Téléchargement en cours • ${dl.progressPercent}%"
+                                                DownloadStatus.PAUSED -> "Téléchargement en pause • ${dl.progressPercent}%"
+                                                DownloadStatus.FAILED -> dl.errorMessage ?: "Échec du téléchargement"
+                                                else -> ""
+                                            },
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            color = if (dl.isFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+
+                                    IconButton(
+                                        onClick = { viewModel.deleteDownload(movie.id) },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Annuler le téléchargement",
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                if (dl.fileSizeBytes > 0L) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "${formatDetailsBytes(dl.downloadedBytes)} / ${formatDetailsBytes(dl.fileSizeBytes)} • ${dl.quality}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
+                                if (dl.isDownloading || dl.isQueued || dl.isPaused) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    LinearProgressIndicator(
+                                        progress = { (dl.progressPercent / 100f).coerceIn(0f, 1f) },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(6.dp)
+                                            .clip(RoundedCornerShape(3.dp))
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -529,5 +633,15 @@ fun MetadataRow(label: String, value: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
+    }
+}
+
+private fun formatDetailsBytes(bytes: Long): String {
+    if (bytes <= 0L) return "0 Mo"
+    val mb = bytes / (1024.0 * 1024.0)
+    return if (mb >= 1024.0) {
+        String.format(Locale.FRANCE, "%.2f Go", mb / 1024.0)
+    } else {
+        String.format(Locale.FRANCE, "%.1f Mo", mb)
     }
 }

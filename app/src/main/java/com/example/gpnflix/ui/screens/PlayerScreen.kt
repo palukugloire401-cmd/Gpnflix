@@ -94,6 +94,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import com.example.gpnflix.data.local.DownloadStatus
 import com.example.gpnflix.data.model.Movie
 import com.example.gpnflix.ui.viewmodel.GpnFlixViewModel
 import kotlinx.coroutines.delay
@@ -115,7 +116,7 @@ fun PlayerScreen(
 
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val downloadedItem = remember(downloads, movie.id) {
-        downloads.find { it.movieId == movie.id && it.status == "COMPLETED" }
+        downloads.find { it.movieId == movie.id && it.status == DownloadStatus.COMPLETED }
     }
 
     var isPlaying by remember { mutableStateOf(true) }
@@ -141,13 +142,14 @@ fun PlayerScreen(
     var showLeftSeekFeedback by remember { mutableStateOf(false) }
     var showRightSeekFeedback by remember { mutableStateOf(false) }
 
-    val exoPlayer = remember {
+    val localOfflineFile = remember(downloadedItem) {
+        downloadedItem?.localFilePath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0L }
+    }
+
+    val exoPlayer = remember(movie.id, localOfflineFile?.absolutePath) {
         ExoPlayer.Builder(context).build().apply {
-            // Check if available as offline downloaded file
-            val localPath = downloadedItem?.localFilePath
-            val localFile = localPath?.let { File(it) }
-            val mediaUri = if (localFile != null && localFile.exists() && localFile.length() > 0) {
-                Uri.fromFile(localFile)
+            val mediaUri = if (localOfflineFile != null) {
+                Uri.fromFile(localOfflineFile)
             } else {
                 Uri.parse(movie.videoUrl)
             }
@@ -206,7 +208,7 @@ fun PlayerScreen(
     }
 
     // Cleanup and save position when leaving screen
-    DisposableEffect(Unit) {
+    DisposableEffect(exoPlayer) {
         onDispose {
             viewModel.saveWatchProgress(
                 movie.id,
@@ -487,9 +489,9 @@ fun PlayerScreen(
                             maxLines = 1
                         )
                         Text(
-                            text = "${movie.category} • ${if (downloadedItem != null) "Lecture Hors-ligne" else "100% Légal"}",
+                            text = "${movie.category} • ${if (localOfflineFile != null) "Lecture Hors-ligne (Local)" else "100% Légal"}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (downloadedItem != null) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.7f)
+                            color = if (localOfflineFile != null) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.7f)
                         )
                     }
 

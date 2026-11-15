@@ -1,7 +1,6 @@
 package com.example.gpnflix.ui.screens
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,9 +22,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -33,6 +35,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -52,9 +55,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.example.gpnflix.data.local.DownloadEntity
+import com.example.gpnflix.data.local.DownloadStatus
+import com.example.gpnflix.data.local.VideoDownloadWithMetadata
 import com.example.gpnflix.data.model.Movie
 import com.example.gpnflix.ui.viewmodel.GpnFlixViewModel
+import java.util.Locale
 
 @Composable
 fun DownloadsScreen(
@@ -66,11 +71,12 @@ fun DownloadsScreen(
 ) {
     BackHandler { onBackClick() }
 
-    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
-    val allMovies = viewModel.allMovies
+    val downloadsWithMeta by viewModel.downloadsWithMetadata.collectAsStateWithLifecycle()
+    val totalBytes by viewModel.totalDownloadedBytes.collectAsStateWithLifecycle()
+    val allMovies by viewModel.moviesState.collectAsStateWithLifecycle()
 
-    val totalSizeMb = remember(downloads) {
-        downloads.sumOf { it.fileSizeBytes } / (1024 * 1024)
+    val completedCount = remember(downloadsWithMeta) {
+        downloadsWithMeta.count { it.download.isCompleted }
     }
 
     Scaffold(
@@ -99,17 +105,30 @@ fun DownloadsScreen(
                             contentDescription = "Retour"
                         )
                     }
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Téléchargements (${downloads.size})",
+                            text = "Téléchargements (${downloadsWithMeta.size})",
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        if (downloads.isNotEmpty()) {
+                        if (downloadsWithMeta.isNotEmpty()) {
                             Text(
-                                text = "Espace utilisé : $totalSizeMb Mo",
+                                text = "$completedCount prêt(s) hors-ligne • Stockage Room : ${formatStorageBytes(totalBytes)}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    if (downloadsWithMeta.isNotEmpty()) {
+                        IconButton(
+                            onClick = { viewModel.clearAllDownloads() },
+                            modifier = Modifier.testTag("downloads_clear_all_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.DeleteSweep,
+                                contentDescription = "Tout supprimer",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -144,14 +163,14 @@ fun DownloadsScreen(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Les contenus disponibles au téléchargement bénéficient d'une licence libre explicite (CC-BY) ou font partie du Domaine Public.",
+                        text = "Les métadonnées et l'état de téléchargement sont conservés localement via Room pour garantir une lecture hors-ligne fiable sur contenu libre (CC-BY / Domaine Public).",
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            if (downloads.isEmpty()) {
+            if (downloadsWithMeta.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -204,13 +223,16 @@ fun DownloadsScreen(
                         .fillMaxSize()
                         .testTag("downloads_list")
                 ) {
-                    items(downloads, key = { it.movieId }) { item ->
-                        val movie = allMovies.find { it.id == item.movieId }
+                    items(downloadsWithMeta, key = { it.download.movieId }) { entry ->
+                        val resolvedMovie = entry.metadata?.toMovie()
+                            ?: allMovies.find { it.id == entry.download.movieId }
                         DownloadItemCard(
-                            entity = item,
-                            movie = movie,
-                            onPlayClick = { movie?.let { onPlayMovie(it) } },
-                            onDeleteClick = { viewModel.deleteDownload(item.movieId) }
+                            entry = entry,
+                            movie = resolvedMovie,
+                            onPlayClick = { resolvedMovie?.let { onPlayMovie(it) } },
+                            onPauseClick = { viewModel.pauseDownload(entry.download.movieId) },
+                            onResumeClick = { viewModel.resumeDownload(entry.download.movieId) },
+                            onDeleteClick = { viewModel.deleteDownload(entry.download.movieId) }
                         )
                     }
                 }
@@ -221,98 +243,210 @@ fun DownloadsScreen(
 
 @Composable
 fun DownloadItemCard(
-    entity: DownloadEntity,
+    entry: VideoDownloadWithMetadata,
     movie: Movie?,
     onPlayClick: () -> Unit,
+    onPauseClick: () -> Unit,
+    onResumeClick: () -> Unit,
     onDeleteClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val sizeMb = entity.fileSizeBytes / (1024 * 1024)
+    val entity = entry.download
 
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(80.dp)
-                    .aspectRatio(0.7f)
-                    .clip(RoundedCornerShape(8.dp))
-            ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(entity.posterUrl)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = entity.title,
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    maxLines = 1
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Filled.CheckCircle,
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .width(80.dp)
+                        .aspectRatio(0.7f)
+                        .clip(RoundedCornerShape(8.dp))
+                ) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(entity.posterUrl)
+                            .crossfade(true)
+                            .build(),
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Téléchargé ($sizeMb Mo)",
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
-                if (movie != null) {
-                    Spacer(modifier = Modifier.height(2.dp))
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "${movie.category} • ${movie.formattedDuration}",
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = entity.title,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        maxLines = 1
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    when (entity.status) {
+                        DownloadStatus.COMPLETED -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Filled.CheckCircle,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Prêt hors-ligne • ${formatStorageBytes(entity.fileSizeBytes)}",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED -> {
+                            Text(
+                                text = if (entity.status == DownloadStatus.QUEUED) {
+                                    "En attente..."
+                                } else {
+                                    "Téléchargement ${entity.progressPercent}% (${formatStorageBytes(entity.downloadedBytes)} / ${formatStorageBytes(entity.fileSizeBytes)})"
+                                },
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        DownloadStatus.PAUSED -> {
+                            Text(
+                                text = "En pause • ${entity.progressPercent}% (${formatStorageBytes(entity.downloadedBytes)})",
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        }
+
+                        DownloadStatus.FAILED -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Filled.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = entity.errorMessage ?: "Échec du téléchargement",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                    color = MaterialTheme.colorScheme.error,
+                                    maxLines = 2
+                                )
+                            }
+                        }
+                    }
+
+                    if (movie != null) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${movie.category} • ${movie.formattedDuration} • ${entity.quality}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Primary action based on status
+                when (entity.status) {
+                    DownloadStatus.COMPLETED -> {
+                        IconButton(
+                            onClick = onPlayClick,
+                            modifier = Modifier.testTag("download_play_${entity.movieId}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PlayArrow,
+                                contentDescription = "Regarder hors-ligne",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+
+                    DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED -> {
+                        IconButton(
+                            onClick = onPauseClick,
+                            modifier = Modifier.testTag("download_pause_${entity.movieId}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Pause,
+                                contentDescription = "Mettre en pause",
+                                tint = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+
+                    DownloadStatus.PAUSED -> {
+                        IconButton(
+                            onClick = onResumeClick,
+                            modifier = Modifier.testTag("download_resume_${entity.movieId}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PlayArrow,
+                                contentDescription = "Reprendre le téléchargement",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+
+                    DownloadStatus.FAILED -> {
+                        IconButton(
+                            onClick = onResumeClick,
+                            modifier = Modifier.testTag("download_retry_${entity.movieId}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Refresh,
+                                contentDescription = "Réessayer le téléchargement",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Delete button
+                IconButton(
+                    onClick = onDeleteClick,
+                    modifier = Modifier.testTag("download_delete_${entity.movieId}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = "Supprimer le téléchargement",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
 
-            // Play button
-            IconButton(
-                onClick = onPlayClick,
-                modifier = Modifier.testTag("download_play_${entity.movieId}")
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = "Regarder hors-ligne",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(28.dp)
-                )
-            }
-
-            // Delete button
-            IconButton(
-                onClick = onDeleteClick,
-                modifier = Modifier.testTag("download_delete_${entity.movieId}")
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = "Supprimer le téléchargement",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp)
+            if (entity.isActive || entity.isPaused) {
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { (entity.progressPercent / 100f).coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(5.dp)
+                        .clip(RoundedCornerShape(3.dp))
                 )
             }
         }
+    }
+}
+
+private fun formatStorageBytes(bytes: Long): String {
+    if (bytes <= 0L) return "0 Mo"
+    val mb = bytes / (1024.0 * 1024.0)
+    return if (mb >= 1024.0) {
+        String.format(Locale.FRANCE, "%.2f Go", mb / 1024.0)
+    } else {
+        String.format(Locale.FRANCE, "%.1f Mo", mb)
     }
 }

@@ -7,14 +7,16 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [
+        VideoMetadataEntity::class,
         WatchHistoryEntity::class,
         FavoriteEntity::class,
         DownloadEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class GpnFlixDatabase : RoomDatabase() {
+    abstract fun videoMetadataDao(): VideoMetadataDao
     abstract fun watchHistoryDao(): WatchHistoryDao
     abstract fun favoriteDao(): FavoriteDao
     abstract fun downloadDao(): DownloadDao
