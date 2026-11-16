@@ -11,304 +11,74 @@ import com.example.gpnflix.data.local.GpnFlixDatabase
 import com.example.gpnflix.data.local.OfflineDownloadManager
 import com.example.gpnflix.data.local.VideoDownloadWithMetadata
 import com.example.gpnflix.data.local.VideoMetadataDao
+import com.example.gpnflix.data.local.VideoSpaceCompressor
 import com.example.gpnflix.data.local.WatchHistoryDao
 import com.example.gpnflix.data.local.WatchHistoryEntity
 import com.example.gpnflix.data.local.toVideoMetadataEntity
 import com.example.gpnflix.data.model.CategoryItem
+import com.example.gpnflix.data.model.MediaContentType
 import com.example.gpnflix.data.model.Movie
+import com.example.gpnflix.data.model.MovieSourceType
+import com.example.gpnflix.data.model.RegionLocaleConfig
+import com.example.gpnflix.data.model.SeriesEpisode
+import com.example.gpnflix.data.model.SpaceCompressionPreset
 import com.example.gpnflix.data.model.UpcomingMovie
+import com.example.gpnflix.data.remote.ApiMappers.enrichMovie
+import com.example.gpnflix.data.remote.ApiMappers.toEpisodes
+import com.example.gpnflix.data.remote.ApiMappers.toMovie
+import com.example.gpnflix.data.remote.ApiMappers.toUpcomingMovie
+import com.example.gpnflix.data.remote.ArchiveOrgApiService
+import com.example.gpnflix.data.remote.EnrichedMovieResult
+import com.example.gpnflix.data.remote.NetworkModule
+import com.example.gpnflix.data.remote.TmdbApiService
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.io.File
+import java.util.Locale
+
+data class HomeSection(
+    val id: String,
+    val title: String,
+    val movies: List<Movie>
+)
+
+data class HomeCatalogResult(
+    val featuredMovies: List<Movie>,
+    val trendingMovies: List<Movie>,
+    val allLoadedMovies: List<Movie>,
+    val sections: List<HomeSection>,
+    val categories: List<CategoryItem>,
+    val activeSourceLabel: String,
+    val loadedFromCacheFallback: Boolean = false
+)
 
 class MovieRepository(
     private val videoMetadataDao: VideoMetadataDao,
     private val watchHistoryDao: WatchHistoryDao,
     private val favoriteDao: FavoriteDao,
     private val downloadDao: DownloadDao,
-    private val downloadManager: OfflineDownloadManager
+    private val downloadManager: OfflineDownloadManager,
+    private val tmdbApi: TmdbApiService = NetworkModule.tmdbApi,
+    private val archiveOrgApi: ArchiveOrgApiService = NetworkModule.archiveOrgApi
 ) {
+    private var cachedGenreMap: Map<Int, String> = emptyMap()
+    private var cachedTvGenreMap: Map<Int, String> = emptyMap()
 
-    // 100% Legal, Open Source, Creative Commons, and Public Domain Catalogue
-    private val catalogue: List<Movie> = listOf(
-        Movie(
-            id = "bbb_2008",
-            title = "Big Buck Bunny",
-            originalTitle = "Big Buck Bunny (Peach Open Movie Project)",
-            synopsis = "Un lapin géant et bienveillant voit son havre de paix forestier perturbé par trois rongeurs espiègles qui maltraitent les créatures innocentes. Il décide alors d'élaborer un plan d'une ingéniosité redoutable pour leur donner une leçon inoubliable.",
-            durationMinutes = 10,
-            releaseYear = 2008,
-            rating = 4.8f,
-            posterUrl = "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80",
-            backdropUrl = "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80",
-            videoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-            category = "Animation",
-            genres = listOf("Animation", "Comédie", "Famille"),
-            director = "Sacha Goedegebure",
-            cast = listOf("Jan Morgenstern", "Ton Roosendaal", "Campbell Barton"),
-            language = "Français",
-            licenseType = "Creative Commons BY 3.0 (Blender Foundation)",
-            isDownloadable = true,
-            isFeatured = true,
-            isTrending = true,
-            isAwardWinner = true
-        ),
-        Movie(
-            id = "tears_of_steel",
-            title = "Tears of Steel",
-            originalTitle = "Tears of Steel (Mango Open Movie Project)",
-            synopsis = "Dans un Amsterdam futuriste et dystopique, un groupe de survivants et scientifiques tente de sauver le monde de l'invasion de robots destructeurs en modifiant la mémoire émotionnelle d'une femme cyborg.",
-            durationMinutes = 12,
-            releaseYear = 2012,
-            rating = 4.7f,
-            posterUrl = "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=800&auto=format&fit=crop&q=80",
-            backdropUrl = "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80",
-            videoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
-            category = "Science-Fiction",
-            genres = listOf("Science-Fiction", "Action", "Cyberpunk"),
-            director = "Ian Hubert",
-            cast = listOf("Derek de Lint", "Sergio Hasselbaink", "Rogier Schippers", "Denise Rebergen"),
-            language = "Anglais",
-            licenseType = "Creative Commons BY 3.0 (Blender Foundation)",
-            isDownloadable = true,
-            isFeatured = true,
-            isTrending = true,
-            isAwardWinner = true
-        ),
-        Movie(
-            id = "sintel_2010",
-            title = "Sintel",
-            originalTitle = "Sintel (Durian Open Movie Project)",
-            synopsis = "Une jeune guerrière solitaire recueille et soigne un bébé dragon blessé qu'elle nomme Scales. Quand celui-ci est capturé par un dragon adulte, elle se lance dans une quête épique et périlleuse à travers le monde pour le retrouver.",
-            durationMinutes = 15,
-            releaseYear = 2010,
-            rating = 4.9f,
-            posterUrl = "https://images.unsplash.com/photo-1514539079130-25950c84af65?w=800&auto=format&fit=crop&q=80",
-            backdropUrl = "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80",
-            videoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
-            category = "Animation",
-            genres = listOf("Animation", "Fantastique", "Aventure"),
-            director = "Colin Levy",
-            cast = listOf("Halina Reijn", "Thom Hoffman"),
-            language = "Français",
-            licenseType = "Creative Commons BY 3.0 (Blender Foundation)",
-            isDownloadable = true,
-            isFeatured = false,
-            isTrending = true,
-            isAwardWinner = true
-        ),
-        Movie(
-            id = "elephants_dream",
-            title = "Elephants Dream",
-            originalTitle = "Elephants Dream (Orange Project)",
-            synopsis = "Deux voyageurs explorent un univers surréaliste et infini composé d'étranges machines mécaniques, oscillant entre l'harmonie des rouages et le chaos d'une architecture vivante.",
-            durationMinutes = 11,
-            releaseYear = 2006,
-            rating = 4.5f,
-            posterUrl = "https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=800&auto=format&fit=crop&q=80",
-            backdropUrl = "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=1600&auto=format&fit=crop&q=80",
-            videoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
-            category = "Animation",
-            genres = listOf("Animation", "Mystère", "Art"),
-            director = "Bassam Kurdali",
-            cast = listOf("Tygo Gernandt", "Cas Jansen"),
-            language = "Anglais",
-            licenseType = "Creative Commons BY 2.5 (Blender Foundation)",
-            isDownloadable = true,
-            isFeatured = false,
-            isTrending = false
-        ),
-        Movie(
-            id = "night_living_dead",
-            title = "La Nuit des morts-vivants",
-            originalTitle = "Night of the Living Dead",
-            synopsis = "Classique absolu du cinéma d'horreur de George A. Romero. Des morts inexplicablement ressuscités assiègent une ferme isolée de Pennsylvanie où se sont réfugiés plusieurs inconnus que la panique divise.",
-            durationMinutes = 96,
-            releaseYear = 1968,
-            rating = 4.8f,
-            posterUrl = "https://images.unsplash.com/photo-1509248961158-e54f6934749c?w=800&auto=format&fit=crop&q=80",
-            backdropUrl = "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80",
-            videoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4",
-            category = "Classiques",
-            genres = listOf("Horreur", "Classique", "Thriller"),
-            director = "George A. Romero",
-            cast = listOf("Duane Jones", "Judith O'Dea", "Karl Hardman", "Marilyn Eastman"),
-            language = "Français",
-            licenseType = "Domaine Public (1968 USA Copyright Failure)",
-            isDownloadable = true,
-            isFeatured = false,
-            isTrending = true,
-            isAwardWinner = true
-        ),
-        Movie(
-            id = "metropolis_1927",
-            title = "Metropolis (Édition Restaurée)",
-            originalTitle = "Metropolis",
-            synopsis = "Chef-d'œuvre visionnaire de Fritz Lang. Dans une mégalopole du futur séparée entre les maîtres des hauteurs et les ouvriers des profondeurs, une jeune prophétesse tente de réconcilier la tête et les mains par le cœur.",
-            durationMinutes = 153,
-            releaseYear = 1927,
-            rating = 4.9f,
-            posterUrl = "https://images.unsplash.com/photo-1478760329108-5c3ed9d495a0?w=800&auto=format&fit=crop&q=80",
-            backdropUrl = "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=1600&auto=format&fit=crop&q=80",
-            videoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-            category = "Classiques",
-            genres = listOf("Classique", "Science-Fiction", "Drame"),
-            director = "Fritz Lang",
-            cast = listOf("Alfred Abel", "Gustav Fröhlich", "Brigitte Helm", "Rudolf Klein-Rogge"),
-            language = "Muet / Musique",
-            licenseType = "Domaine Public International",
-            isDownloadable = true,
-            isFeatured = true,
-            isTrending = false,
-            isAwardWinner = true
-        ),
-        Movie(
-            id = "voyage_lune_1902",
-            title = "Le Voyage dans la Lune",
-            originalTitle = "A Trip to the Moon",
-            synopsis = "Le premier film de science-fiction de l'histoire du cinéma, créé par le magicien Georges Méliès. Un groupe d'astronomes est propulsé vers la Lune dans une capsule tirée par un gigantesque canon.",
-            durationMinutes = 14,
-            releaseYear = 1902,
-            rating = 4.9f,
-            posterUrl = "https://images.unsplash.com/photo-1532693322450-2cb5c511067d?w=800&auto=format&fit=crop&q=80",
-            backdropUrl = "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=1600&auto=format&fit=crop&q=80",
-            videoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
-            category = "Classiques",
-            genres = listOf("Classique", "Aventure", "Fantastique"),
-            director = "Georges Méliès",
-            cast = listOf("Georges Méliès", "Bleuette Bernon", "François Lallement"),
-            language = "Français",
-            licenseType = "Domaine Public Mondial",
-            isDownloadable = true,
-            isFeatured = false,
-            isTrending = true,
-            isAwardWinner = true
-        ),
-        Movie(
-            id = "nasa_artemis",
-            title = "NASA : En Route vers la Lune et Mars",
-            originalTitle = "NASA Artemis: Path to the Moon & Beyond",
-            synopsis = "Une immersion spectaculaire dans les coulisses de la mission Artemis de la NASA. Découvrez les technologies spatiales de nouvelle génération qui permettront aux humains de retourner durablement sur la Lune.",
-            durationMinutes = 45,
-            releaseYear = 2024,
-            rating = 4.8f,
-            posterUrl = "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&auto=format&fit=crop&q=80",
-            backdropUrl = "https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?w=1600&auto=format&fit=crop&q=80",
-            videoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
-            category = "Documentaire",
-            genres = listOf("Documentaire", "Espace", "Science"),
-            director = "NASA Media Operations",
-            cast = listOf("Reid Wiseman", "Victor Glover", "Christina Koch", "Jeremy Hansen"),
-            language = "Français",
-            licenseType = "Domaine Public (Gouvernement fédéral USA / NASA)",
-            isDownloadable = true,
-            isFeatured = false,
-            isTrending = true,
-            isAwardWinner = false
-        ),
-        Movie(
-            id = "charade_1963",
-            title = "Charade",
-            originalTitle = "Charade",
-            synopsis = "Regina Lampert découvre à son retour de vacances que son mari a été assassiné et que son compte en banque a été vidé. Elle est rapidement pourchassée dans Paris par trois criminels qui réclament une fortune volée.",
-            durationMinutes = 113,
-            releaseYear = 1963,
-            rating = 4.7f,
-            posterUrl = "https://images.unsplash.com/photo-1485846234645-a62644f84728?w=800&auto=format&fit=crop&q=80",
-            backdropUrl = "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80",
-            videoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyBlazes.mp4",
-            category = "Classiques",
-            genres = listOf("Comédie", "Mystère", "Romance"),
-            director = "Stanley Donen",
-            cast = listOf("Cary Grant", "Audrey Hepburn", "Walter Matthau", "James Coburn"),
-            language = "Français",
-            licenseType = "Domaine Public (Notice de droit d'auteur défaillante)",
-            isDownloadable = true,
-            isFeatured = false,
-            isTrending = false,
-            isAwardWinner = true
-        ),
-        Movie(
-            id = "cosmos_laundromat",
-            title = "Cosmos Laundromat",
-            originalTitle = "Cosmos Laundromat (Gooseberry Project)",
-            synopsis = "Sur une île désolée, Franck le mouton tente de mettre fin à ses jours jusqu'à ce qu'un mystérieux représentant nommé Victor lui propose d'explorer des vies infinies grâce à une laverie interdimensionnelle.",
-            durationMinutes = 13,
-            releaseYear = 2015,
-            rating = 4.6f,
-            posterUrl = "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80",
-            backdropUrl = "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=1600&auto=format&fit=crop&q=80",
-            videoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4",
-            category = "Animation",
-            genres = listOf("Animation", "Absurde", "Science-Fiction"),
-            director = "Mathieu Auvray",
-            cast = listOf("Pierre Bokma", "Reinout Scholten van Aschat"),
-            language = "Anglais",
-            licenseType = "Creative Commons BY 3.0 (Blender Foundation)",
-            isDownloadable = true,
-            isFeatured = false,
-            isTrending = false,
-            isAwardWinner = true
-        )
-    )
-
-    private val categories: List<CategoryItem> = listOf(
-        CategoryItem("all", "Tous les contenus", "L'intégralité du catalogue streaming légal", "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800"),
-        CategoryItem("Animation", "Animation & 3D", "Films d'animation open-source et créations indépendantes", "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800"),
-        CategoryItem("Classiques", "Classiques du Cinéma", "Les plus grands chefs-d'œuvre du domaine public", "https://images.unsplash.com/photo-1478760329108-5c3ed9d495a0?w=800"),
-        CategoryItem("Science-Fiction", "Science-Fiction", "Futurs dystopiques, voyages spatiaux et cyberpunk", "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=800"),
-        CategoryItem("Documentaire", "Documentaires", "Exploration spatiale, nature et culture sans frontières", "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800")
-    )
-
-    private val upcomingList: List<UpcomingMovie> = listOf(
-        UpcomingMovie(
-            id = "upcoming_project_gold",
-            title = "Projet Or : L'Odyssée Ouverte",
-            expectedReleaseDate = "15 Décembre 2026",
-            posterUrl = "https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=800",
-            backdropUrl = "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600",
-            synopsis = "Le nouveau projet d'animation en open source par la communauté mondiale de créateurs 3D. Une épopée mythologique réalisée à 100% avec des outils libres.",
-            category = "Animation",
-            licenseNotice = "Creative Commons Attribution 4.0 International",
-            trailerUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4"
-        ),
-        UpcomingMovie(
-            id = "upcoming_restoration_caligari",
-            title = "Le Cabinet du Dr Caligari (Restauration 4K)",
-            expectedReleaseDate = "28 Janvier 2027",
-            posterUrl = "https://images.unsplash.com/photo-1478760329108-5c3ed9d495a0?w=800",
-            backdropUrl = "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=1600",
-            synopsis = "Une nouvelle numérisation en résolution 4K avec bande-son orchestrale originale du monument de l'expressionnisme allemand.",
-            category = "Classiques",
-            licenseNotice = "Domaine Public (1920)",
-            trailerUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
-        ),
-        UpcomingMovie(
-            id = "upcoming_james_webb",
-            title = "James Webb : Aux Frontières de l'Univers",
-            expectedReleaseDate = "14 Février 2027",
-            posterUrl = "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800",
-            backdropUrl = "https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?w=1600",
-            synopsis = "Documentaire officiel de la NASA retraçant les découvertes des premières galaxies formées après le Big Bang.",
-            category = "Documentaire",
-            licenseNotice = "Domaine Public Gouvernemental",
-            trailerUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
-        )
-    )
-
-    // Room Video Metadata initialization & reactive queries
-    suspend fun ensureCatalogueSeeded() {
-        videoMetadataDao.upsertAll(catalogue.map { it.toVideoMetadataEntity() })
+    suspend fun reconcileDownloadsOnStartup() {
         downloadManager.reconcileOnStartup()
     }
 
     fun observeAllVideos(): Flow<List<Movie>> =
-        videoMetadataDao.observeAllVideos().map { list ->
-            if (list.isEmpty()) catalogue else list.map { it.toMovie() }
-        }
+        videoMetadataDao.observeAllVideos().map { list -> list.map { it.toMovie() } }
 
     fun observeVideoById(id: String): Flow<Movie?> =
         videoMetadataDao.observeVideoById(id).map { it?.toMovie() }
+
+    suspend fun getCachedMovieById(id: String): Movie? =
+        videoMetadataDao.getVideoById(id)?.toMovie()
 
     fun searchVideosInRoom(
         query: String,
@@ -323,48 +93,913 @@ class MovieRepository(
             language = languageFilter
         ).map { list -> list.map { it.toMovie() } }
 
-    fun getAllMovies(): List<Movie> = catalogue
-
-    fun getFeaturedMovies(): List<Movie> = catalogue.filter { it.isFeatured }
-
-    fun getTrendingMovies(): List<Movie> = catalogue.filter { it.isTrending }
-
-    fun getMoviesByCategory(category: String): List<Movie> {
-        if (category == "all" || category.isBlank()) return catalogue
-        return catalogue.filter { it.category.equals(category, ignoreCase = true) }
+    private fun baseArchiveCategories(localeConfig: RegionLocaleConfig): List<CategoryItem> {
+        val langSuffix = if (localeConfig.frenchOnly) " AND ${localeConfig.archiveLanguageQuery}" else ""
+        return listOf(
+            CategoryItem(
+                id = "all",
+                name = "Tout en Français",
+                description = "Films, séries, musique, dessins animés et théâtre en français",
+                archiveQuery = "mediatype:movies AND (collection:feature_films OR collection:animationandcartoons OR collection:opensource_movies)$langSuffix"
+            ),
+            CategoryItem(
+                id = MediaContentType.FILM,
+                name = "Films",
+                description = "Longs-métrages et cinéma international en version française",
+                archiveQuery = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies)$langSuffix"
+            ),
+            CategoryItem(
+                id = MediaContentType.SERIES,
+                name = "Séries",
+                description = "Séries TV populaires, saisons complètes et compression 100 Mo → 50 Mo",
+                archiveQuery = "mediatype:movies AND (subject:television OR subject:series OR collection:classic_tv)$langSuffix"
+            ),
+            CategoryItem(
+                id = MediaContentType.CARTOON,
+                name = "Dessins animés",
+                description = "Animation familiale, dessins animés classiques et courts-métrages ouverts",
+                archiveQuery = "mediatype:movies AND collection:animationandcartoons$langSuffix"
+            ),
+            CategoryItem(
+                id = MediaContentType.MUSIC,
+                name = "Musique & Concerts",
+                description = "Films musicaux, concerts live et captations musicales en français",
+                archiveQuery = "mediatype:movies AND (subject:music OR subject:concert OR subject:chanson)$langSuffix"
+            ),
+            CategoryItem(
+                id = MediaContentType.THEATER,
+                name = "Théâtre & Scène",
+                description = "Pièces de théâtre, classiques dramatiques et arts vivants",
+                archiveQuery = "mediatype:movies AND (subject:theater OR subject:theatre OR subject:moliere OR subject:drama)$langSuffix"
+            ),
+            CategoryItem(
+                id = "Français",
+                name = "Cinéma Francophone",
+                description = "Œuvres francophones intégrales (${localeConfig.displayLabel})",
+                archiveQuery = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies) AND ${localeConfig.archiveLanguageQuery}"
+            ),
+            CategoryItem(
+                id = "Science-Fiction",
+                name = "Sci-Fi & Fantastique",
+                description = "Récits futuristes et cinéma fantastique",
+                archiveQuery = "mediatype:movies AND (collection:SciFi_Horror OR subject:\"science fiction\")"
+            ),
+            CategoryItem(
+                id = "Documentaire",
+                name = "Documentaires & Sciences",
+                description = "Exploration spatiale NASA, histoire et découvertes",
+                archiveQuery = "mediatype:movies AND (collection:nasa OR subject:documentary)"
+            )
+        )
     }
 
-    fun getMovieById(id: String): Movie? = catalogue.find { it.id == id }
-
-    fun getCategories(): List<CategoryItem> = categories
-
-    fun getUpcomingMovies(): List<UpcomingMovie> = upcomingList
-
-    fun searchMovies(
-        query: String,
-        categoryFilter: String? = null,
-        yearFilter: Int? = null,
-        languageFilter: String? = null
+    private suspend fun searchArchiveFrenchPrioritized(
+        baseQuery: String,
+        rows: Int,
+        localeConfig: RegionLocaleConfig,
+        overrideMediaType: String? = null,
+        overrideCategory: String? = null
     ): List<Movie> {
-        return catalogue.filter { movie ->
-            val matchesQuery = query.isBlank() ||
-                    movie.title.contains(query, ignoreCase = true) ||
-                    movie.originalTitle.contains(query, ignoreCase = true) ||
-                    movie.synopsis.contains(query, ignoreCase = true) ||
-                    movie.director.contains(query, ignoreCase = true) ||
-                    movie.cast.any { it.contains(query, ignoreCase = true) }
+        val strictFrenchDocs = runCatching {
+            archiveOrgApi.searchMovies(
+                query = "$baseQuery AND ${localeConfig.archiveLanguageQuery}",
+                rows = rows
+            ).response?.docs.orEmpty()
+        }.getOrDefault(emptyList())
 
-            val matchesCategory = categoryFilter.isNullOrBlank() ||
-                    categoryFilter.equals("all", ignoreCase = true) ||
-                    movie.category.equals(categoryFilter, ignoreCase = true)
+        val combinedDocs = if (strictFrenchDocs.size >= 4 || localeConfig.frenchOnly && strictFrenchDocs.isNotEmpty()) {
+            strictFrenchDocs
+        } else {
+            val fallbackDocs = runCatching {
+                archiveOrgApi.searchMovies(
+                    query = baseQuery,
+                    rows = rows
+                ).response?.docs.orEmpty()
+            }.getOrDefault(emptyList())
+            (strictFrenchDocs + fallbackDocs).distinctBy { it.identifier }
+        }
 
-            val matchesYear = yearFilter == null || movie.releaseYear == yearFilter
+        return combinedDocs.mapNotNull { doc ->
+            doc.toMovie(
+                localeConfig = localeConfig,
+                overrideMediaType = overrideMediaType
+            )?.let { m ->
+                val localizedCat = overrideCategory ?: m.category
+                if (localeConfig.frenchOnly) {
+                    m.copy(category = localizedCat, language = "Français")
+                } else {
+                    m.copy(category = localizedCat)
+                }
+            }
+        }
+    }
 
-            val matchesLanguage = languageFilter.isNullOrBlank() ||
-                    languageFilter.equals("Toutes", ignoreCase = true) ||
-                    movie.language.contains(languageFilter, ignoreCase = true)
+    suspend fun fetchHomeCatalog(localeConfig: RegionLocaleConfig): HomeCatalogResult = coroutineScope {
+        val tmdbEnabled = NetworkModule.hasValidTmdbKey()
 
-            matchesQuery && matchesCategory && matchesYear && matchesLanguage
+        val genreMapDeferred = async {
+            if (!tmdbEnabled) emptyMap()
+            else runCatching {
+                tmdbApi.getGenres(localeConfig.tmdbLanguage).genres.associate { it.id to it.name }
+            }.getOrDefault(emptyMap())
+        }
+
+        val tvGenreMapDeferred = async {
+            if (!tmdbEnabled) emptyMap()
+            else runCatching {
+                tmdbApi.getTvGenres(localeConfig.tmdbLanguage).genres.associate { it.id to it.name }
+            }.getOrDefault(emptyMap())
+        }
+
+        // Archive.org multi-type French-prioritized streams
+        val localizedArchiveDeferred = async {
+            searchArchiveFrenchPrioritized(
+                baseQuery = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies)",
+                rows = 14,
+                localeConfig = localeConfig,
+                overrideMediaType = MediaContentType.FILM
+            ).mapIndexed { idx, m ->
+                m.copy(
+                    isFeatured = !tmdbEnabled && idx < 3,
+                    isTrending = !tmdbEnabled && idx < 6
+                )
+            }
+        }
+
+        val archiveSeriesDeferred = async {
+            searchArchiveFrenchPrioritized(
+                baseQuery = "mediatype:movies AND (subject:television OR subject:series OR collection:classic_tv)",
+                rows = 10,
+                localeConfig = localeConfig,
+                overrideMediaType = MediaContentType.SERIES,
+                overrideCategory = "Séries"
+            )
+        }
+
+        val animationArchiveDeferred = async {
+            searchArchiveFrenchPrioritized(
+                baseQuery = "mediatype:movies AND collection:animationandcartoons",
+                rows = 10,
+                localeConfig = localeConfig,
+                overrideMediaType = MediaContentType.CARTOON,
+                overrideCategory = "Dessins animés"
+            )
+        }
+
+        val musicArchiveDeferred = async {
+            searchArchiveFrenchPrioritized(
+                baseQuery = "mediatype:movies AND (subject:music OR subject:concert OR subject:chanson)",
+                rows = 10,
+                localeConfig = localeConfig,
+                overrideMediaType = MediaContentType.MUSIC,
+                overrideCategory = "Musique"
+            )
+        }
+
+        val theaterArchiveDeferred = async {
+            searchArchiveFrenchPrioritized(
+                baseQuery = "mediatype:movies AND (subject:theater OR subject:theatre OR subject:moliere OR subject:stage)",
+                rows = 10,
+                localeConfig = localeConfig,
+                overrideMediaType = MediaContentType.THEATER,
+                overrideCategory = "Théâtre"
+            )
+        }
+
+        val docsArchiveDeferred = async {
+            searchArchiveFrenchPrioritized(
+                baseQuery = "mediatype:movies AND (collection:nasa OR subject:documentary)",
+                rows = 8,
+                localeConfig = localeConfig,
+                overrideMediaType = MediaContentType.FILM,
+                overrideCategory = "Documentaire"
+            )
+        }
+
+        val genreMap = genreMapDeferred.await().also { if (it.isNotEmpty()) cachedGenreMap = it }
+        val tvGenreMap = tvGenreMapDeferred.await().also { if (it.isNotEmpty()) cachedTvGenreMap = it }
+
+        val tmdbTrendingMoviesDeferred = async {
+            if (!tmdbEnabled) emptyList()
+            else runCatching {
+                tmdbApi.getTrendingMovies(localeConfig.tmdbLanguage).results
+                    .let { list ->
+                        if (localeConfig.frenchOnly) {
+                            list.filter { !it.overview.isNullOrBlank() }.ifEmpty { list }
+                        } else list
+                    }
+                    .mapIndexed { idx, dto ->
+                        dto.toMovie(
+                            genreMap = genreMap,
+                            localeConfig = localeConfig,
+                            isFeatured = idx < 4,
+                            isTrending = true
+                        )
+                    }
+            }.getOrDefault(emptyList())
+        }
+
+        val tmdbNowPlayingDeferred = async {
+            if (!tmdbEnabled) emptyList()
+            else runCatching {
+                tmdbApi.getNowPlayingMovies(localeConfig.tmdbLanguage, localeConfig.regionCode).results
+                    .let { list ->
+                        if (localeConfig.frenchOnly) {
+                            list.filter { !it.overview.isNullOrBlank() }.ifEmpty { list }
+                        } else list
+                    }
+                    .map { dto ->
+                        dto.toMovie(
+                            genreMap = genreMap,
+                            localeConfig = localeConfig,
+                            overrideMediaType = MediaContentType.FILM
+                        )
+                    }
+            }.getOrDefault(emptyList())
+        }
+
+        val tmdbSeriesDeferred = async {
+            if (!tmdbEnabled) emptyList()
+            else runCatching {
+                val trending = tmdbApi.getTrendingTv(localeConfig.tmdbLanguage).results
+                val discover = tmdbApi.discoverTv(language = localeConfig.tmdbLanguage).results
+                (trending + discover).distinctBy { it.id }
+                    .let { list ->
+                        if (localeConfig.frenchOnly) {
+                            list.filter { !it.overview.isNullOrBlank() }.ifEmpty { list }
+                        } else list
+                    }
+                    .mapIndexed { idx, dto ->
+                        dto.toMovie(
+                            genreMap = tvGenreMap.ifEmpty { genreMap },
+                            localeConfig = localeConfig,
+                            isFeatured = idx == 0,
+                            isTrending = idx < 3,
+                            overrideMediaType = MediaContentType.SERIES
+                        )
+                    }
+            }.getOrDefault(emptyList())
+        }
+
+        val tmdbCartoonsDeferred = async {
+            if (!tmdbEnabled) emptyList()
+            else runCatching {
+                val animeMovies = tmdbApi.discoverMovies(
+                    language = localeConfig.tmdbLanguage,
+                    region = localeConfig.regionCode,
+                    genreIds = "16"
+                ).results.map {
+                    it.toMovie(genreMap, localeConfig, overrideMediaType = MediaContentType.CARTOON)
+                        .copy(category = "Dessins animés", isFamilyFriendly = true)
+                }
+                val animeTv = tmdbApi.discoverTv(
+                    language = localeConfig.tmdbLanguage,
+                    genreIds = "16"
+                ).results.take(8).map {
+                    it.toMovie(tvGenreMap.ifEmpty { genreMap }, localeConfig, overrideMediaType = MediaContentType.CARTOON)
+                        .copy(category = "Dessins animés", isFamilyFriendly = true)
+                }
+                (animeMovies + animeTv).distinctBy { it.id }
+            }.getOrDefault(emptyList())
+        }
+
+        val tmdbMusicDeferred = async {
+            if (!tmdbEnabled) emptyList()
+            else runCatching {
+                tmdbApi.discoverMovies(
+                    language = localeConfig.tmdbLanguage,
+                    region = localeConfig.regionCode,
+                    genreIds = "10402"
+                ).results.map {
+                    it.toMovie(genreMap, localeConfig, overrideMediaType = MediaContentType.MUSIC)
+                        .copy(category = "Musique", isFamilyFriendly = true)
+                }
+            }.getOrDefault(emptyList())
+        }
+
+        val tmdbTheaterDeferred = async {
+            if (!tmdbEnabled) emptyList()
+            else runCatching {
+                tmdbApi.discoverMovies(
+                    language = localeConfig.tmdbLanguage,
+                    region = localeConfig.regionCode,
+                    genreIds = "18",
+                    keywords = "10181|4344"
+                ).results.ifEmpty {
+                    tmdbApi.discoverMovies(
+                        language = localeConfig.tmdbLanguage,
+                        region = localeConfig.regionCode,
+                        genreIds = "18",
+                        originalLanguage = "fr"
+                    ).results
+                }.map {
+                    it.toMovie(genreMap, localeConfig, overrideMediaType = MediaContentType.THEATER)
+                        .copy(category = "Théâtre")
+                }
+            }.getOrDefault(emptyList())
+        }
+
+        val localizedArchive = localizedArchiveDeferred.await()
+        val archiveSeries = archiveSeriesDeferred.await()
+        val animationArchive = animationArchiveDeferred.await()
+        val musicArchive = musicArchiveDeferred.await()
+        val theaterArchive = theaterArchiveDeferred.await()
+        val docsArchive = docsArchiveDeferred.await()
+
+        val tmdbTrendingMovies = tmdbTrendingMoviesDeferred.await()
+        val tmdbNowPlaying = tmdbNowPlayingDeferred.await()
+        val tmdbSeries = tmdbSeriesDeferred.await()
+        val tmdbCartoons = tmdbCartoonsDeferred.await()
+        val tmdbMusic = tmdbMusicDeferred.await()
+        val tmdbTheater = tmdbTheaterDeferred.await()
+
+        val allFilms = (tmdbTrendingMovies + tmdbNowPlaying + localizedArchive + docsArchive).distinctBy { it.id }
+        val allSeries = (tmdbSeries + archiveSeries).distinctBy { it.id }
+        val allCartoons = (tmdbCartoons + animationArchive).distinctBy { it.id }
+        val allMusic = (tmdbMusic + musicArchive).distinctBy { it.id }
+        val allTheater = (tmdbTheater + theaterArchive).distinctBy { it.id }
+
+        val combinedList = (tmdbTrendingMovies + tmdbSeries + allFilms + allSeries + allCartoons + allMusic + allTheater)
+            .distinctBy { it.id }
+
+        if (combinedList.isEmpty()) {
+            val cached = videoMetadataDao.observeAllVideos().first().map { it.toMovie() }
+            val fallbackFeatured = cached.filter { it.isFeatured }.ifEmpty { cached.take(5) }
+            val fallbackTrending = cached.filter { it.isTrending }.ifEmpty { cached.take(10) }
+            val sections = buildHomeSections(
+                localeConfig = localeConfig,
+                films = cached.filter { it.mediaType == MediaContentType.FILM },
+                series = cached.filter { it.mediaType == MediaContentType.SERIES },
+                cartoons = cached.filter { it.mediaType == MediaContentType.CARTOON },
+                music = cached.filter { it.mediaType == MediaContentType.MUSIC },
+                theater = cached.filter { it.mediaType == MediaContentType.THEATER },
+                localizedArchive = cached.filter { it.sourceType == MovieSourceType.ARCHIVE_ORG },
+                docs = cached.filter { it.category == "Documentaire" }
+            )
+            return@coroutineScope HomeCatalogResult(
+                featuredMovies = fallbackFeatured,
+                trendingMovies = fallbackTrending,
+                allLoadedMovies = cached,
+                sections = sections,
+                categories = enrichCategoriesWithBanners(baseArchiveCategories(localeConfig), cached, genreMap, localeConfig),
+                activeSourceLabel = "Cache local hors-ligne (FR)",
+                loadedFromCacheFallback = true
+            )
+        }
+
+        // Preserve already-resolved direct video URLs & trailer keys in Room
+        val existingById = videoMetadataDao.observeAllVideos().first().associateBy { it.id }
+        val mergedForCache = combinedList.map { incoming ->
+            val prev = existingById[incoming.id]
+            if (prev != null && (prev.videoUrl.isNotBlank() || !prev.trailerYoutubeKey.isNullOrBlank())) {
+                incoming.copy(
+                    videoUrl = prev.videoUrl.ifBlank { incoming.videoUrl },
+                    trailerUrl = prev.trailerUrl.ifBlank { incoming.trailerUrl },
+                    trailerYoutubeKey = prev.trailerYoutubeKey ?: incoming.trailerYoutubeKey,
+                    durationMinutes = if (prev.durationMinutes > 0) prev.durationMinutes else incoming.durationMinutes,
+                    director = if (prev.director.isNotBlank() && prev.director != "Voir fiche technique") prev.director else incoming.director,
+                    cast = prev.castCsv.split("|").filter { it.isNotBlank() }.ifEmpty { incoming.cast },
+                    isDownloadable = prev.isDownloadable && prev.videoUrl.isNotBlank(),
+                    qualities = prev.qualitiesCsv.split("|").filter { it.isNotBlank() }.ifEmpty { incoming.qualities }
+                )
+            } else {
+                incoming
+            }
+        }
+        videoMetadataDao.upsertAll(mergedForCache.map { it.toVideoMetadataEntity() })
+
+        val featured = mergedForCache.filter { it.isFeatured }.ifEmpty { mergedForCache.take(5) }
+        val trending = mergedForCache.filter { it.isTrending }.ifEmpty { mergedForCache.take(10) }
+
+        val sections = buildHomeSections(
+            localeConfig = localeConfig,
+            films = (tmdbNowPlaying + tmdbTrendingMovies).distinctBy { it.id },
+            series = allSeries,
+            cartoons = allCartoons,
+            music = allMusic,
+            theater = allTheater,
+            localizedArchive = localizedArchive,
+            docs = docsArchive
+        )
+
+        val categories = enrichCategoriesWithBanners(
+            baseCategories = baseArchiveCategories(localeConfig),
+            movies = mergedForCache,
+            genreMap = genreMap,
+            localeConfig = localeConfig
+        )
+
+        val sourceLabel = if (tmdbEnabled && (tmdbTrendingMovies.isNotEmpty() || tmdbSeries.isNotEmpty())) {
+            "Français uniquement (${localeConfig.tmdbLanguage}) • TMDB + Archive"
+        } else {
+            "Français uniquement • Internet Archive (${localeConfig.displayLabel})"
+        }
+
+        HomeCatalogResult(
+            featuredMovies = featured,
+            trendingMovies = trending,
+            allLoadedMovies = mergedForCache,
+            sections = sections,
+            categories = categories,
+            activeSourceLabel = sourceLabel,
+            loadedFromCacheFallback = false
+        )
+    }
+
+    private fun buildHomeSections(
+        localeConfig: RegionLocaleConfig,
+        films: List<Movie>,
+        series: List<Movie>,
+        cartoons: List<Movie>,
+        music: List<Movie>,
+        theater: List<Movie>,
+        localizedArchive: List<Movie>,
+        docs: List<Movie>
+    ): List<HomeSection> {
+        val list = mutableListOf<HomeSection>()
+        if (films.isNotEmpty()) {
+            list.add(HomeSection("films_fr", "Films en Français (${localeConfig.displayLabel})", films))
+        }
+        if (series.isNotEmpty()) {
+            list.add(HomeSection("series_fr", "Séries TV & Feuilletons (FR)", series))
+        }
+        if (cartoons.isNotEmpty()) {
+            list.add(HomeSection("cartoons_fr", "Dessins animés & Animation", cartoons))
+        }
+        if (music.isNotEmpty()) {
+            list.add(HomeSection("music_fr", "Musique, Concerts & Clips", music))
+        }
+        if (theater.isNotEmpty()) {
+            list.add(HomeSection("theater_fr", "Théâtre & Arts de la scène", theater))
+        }
+        if (localizedArchive.isNotEmpty()) {
+            list.add(HomeSection("localized_archive", "Films complets en Français (Archive.org)", localizedArchive))
+        }
+        if (docs.isNotEmpty()) {
+            list.add(HomeSection("docs_fr", "Documentaires & Sciences", docs))
+        }
+        return list
+    }
+
+    private fun enrichCategoriesWithBanners(
+        baseCategories: List<CategoryItem>,
+        movies: List<Movie>,
+        genreMap: Map<Int, String>,
+        localeConfig: RegionLocaleConfig
+    ): List<CategoryItem> {
+        val tmdbGenreCategories = genreMap.entries.take(8).map { (genreId, genreName) ->
+            val sampleBanner = movies.firstOrNull { m ->
+                m.genres.any { it.equals(genreName, ignoreCase = true) } && m.backdropUrl.isNotBlank()
+            }?.backdropUrl
+                ?: movies.firstOrNull { it.backdropUrl.isNotBlank() }?.backdropUrl.orEmpty()
+            CategoryItem(
+                id = "tmdb_genre_$genreId",
+                name = genreName,
+                description = "Titres populaires dans le genre $genreName (${localeConfig.tmdbLanguage})",
+                bannerUrl = sampleBanner,
+                tmdbGenreId = genreId
+            )
+        }
+
+        val enrichedBase = baseCategories.map { cat ->
+            val banner = when (cat.id) {
+                "all" -> movies.firstOrNull { it.backdropUrl.isNotBlank() }?.backdropUrl.orEmpty()
+                MediaContentType.FILM,
+                MediaContentType.SERIES,
+                MediaContentType.MUSIC,
+                MediaContentType.CARTOON,
+                MediaContentType.THEATER -> movies.firstOrNull {
+                    it.mediaType == cat.id && it.backdropUrl.isNotBlank()
+                }?.backdropUrl ?: movies.firstOrNull { it.backdropUrl.isNotBlank() }?.backdropUrl.orEmpty()
+                "Français" -> movies.firstOrNull {
+                    it.language.equals("Français", ignoreCase = true) && it.backdropUrl.isNotBlank()
+                }?.backdropUrl ?: movies.firstOrNull { it.backdropUrl.isNotBlank() }?.backdropUrl.orEmpty()
+                else -> movies.firstOrNull {
+                    it.category.equals(cat.id, ignoreCase = true) && it.backdropUrl.isNotBlank()
+                }?.backdropUrl ?: movies.firstOrNull { it.backdropUrl.isNotBlank() }?.backdropUrl.orEmpty()
+            }
+            cat.copy(bannerUrl = banner)
+        }
+
+        return (enrichedBase + tmdbGenreCategories).distinctBy { it.name.lowercase(Locale.ROOT) }
+    }
+
+    suspend fun fetchCategoryMovies(
+        category: CategoryItem,
+        localeConfig: RegionLocaleConfig
+    ): List<Movie> = coroutineScope {
+        val tmdbEnabled = NetworkModule.hasValidTmdbKey()
+        val gMap = cachedGenreMap
+        val tvMap = cachedTvGenreMap.ifEmpty { cachedGenreMap }
+
+        val tmdbDeferred = async {
+            if (!tmdbEnabled) return@async emptyList()
+            runCatching {
+                when {
+                    category.tmdbGenreId != null -> tmdbApi.discoverMovies(
+                        language = localeConfig.tmdbLanguage,
+                        region = localeConfig.regionCode,
+                        genreIds = category.tmdbGenreId.toString()
+                    ).results.map { it.toMovie(gMap, localeConfig).copy(category = category.name) }
+
+                    category.id == MediaContentType.SERIES -> tmdbApi.discoverTv(
+                        language = localeConfig.tmdbLanguage
+                    ).results.map { it.toMovie(tvMap, localeConfig, overrideMediaType = MediaContentType.SERIES) }
+
+                    category.id == MediaContentType.CARTOON -> {
+                        val m = tmdbApi.discoverMovies(
+                            language = localeConfig.tmdbLanguage,
+                            region = localeConfig.regionCode,
+                            genreIds = "16"
+                        ).results.map { it.toMovie(gMap, localeConfig, overrideMediaType = MediaContentType.CARTOON) }
+                        val t = tmdbApi.discoverTv(
+                            language = localeConfig.tmdbLanguage,
+                            genreIds = "16"
+                        ).results.map { it.toMovie(tvMap, localeConfig, overrideMediaType = MediaContentType.CARTOON) }
+                        (m + t).distinctBy { it.id }
+                    }
+
+                    category.id == MediaContentType.MUSIC -> tmdbApi.discoverMovies(
+                        language = localeConfig.tmdbLanguage,
+                        region = localeConfig.regionCode,
+                        genreIds = "10402"
+                    ).results.map { it.toMovie(gMap, localeConfig, overrideMediaType = MediaContentType.MUSIC) }
+
+                    category.id == MediaContentType.THEATER -> tmdbApi.discoverMovies(
+                        language = localeConfig.tmdbLanguage,
+                        region = localeConfig.regionCode,
+                        genreIds = "18",
+                        keywords = "10181|4344"
+                    ).results.ifEmpty {
+                        tmdbApi.discoverMovies(
+                            language = localeConfig.tmdbLanguage,
+                            region = localeConfig.regionCode,
+                            genreIds = "18",
+                            originalLanguage = "fr"
+                        ).results
+                    }.map { it.toMovie(gMap, localeConfig, overrideMediaType = MediaContentType.THEATER) }
+
+                    category.id == MediaContentType.FILM || category.id == "Français" -> tmdbApi.discoverMovies(
+                        language = localeConfig.tmdbLanguage,
+                        region = localeConfig.regionCode,
+                        originalLanguage = if (category.id == "Français") "fr" else null
+                    ).results.map { it.toMovie(gMap, localeConfig, overrideMediaType = MediaContentType.FILM) }
+
+                    else -> emptyList()
+                }
+            }.getOrDefault(emptyList())
+        }
+
+        val archiveDeferred = async {
+            if (category.archiveQuery.isBlank()) return@async emptyList()
+            val overrideType = when (category.id) {
+                MediaContentType.FILM,
+                MediaContentType.SERIES,
+                MediaContentType.MUSIC,
+                MediaContentType.CARTOON,
+                MediaContentType.THEATER -> category.id
+                else -> null
+            }
+            searchArchiveFrenchPrioritized(
+                baseQuery = category.archiveQuery.substringBefore(" AND (language:"),
+                rows = 24,
+                localeConfig = localeConfig,
+                overrideMediaType = overrideType
+            )
+        }
+
+        val merged = (tmdbDeferred.await() + archiveDeferred.await()).distinctBy { it.id }
+        if (merged.isNotEmpty()) {
+            videoMetadataDao.upsertAll(merged.map { it.toVideoMetadataEntity() })
+            merged
+        } else {
+            val cached = videoMetadataDao.observeAllVideos().first().map { it.toMovie() }
+            if (category.id == "all") cached
+            else cached.filter {
+                it.mediaType == category.id ||
+                    it.category.equals(category.id, ignoreCase = true) ||
+                    it.category.equals(category.name, ignoreCase = true) ||
+                    it.genres.any { g -> g.equals(category.name, ignoreCase = true) }
+            }
+        }
+    }
+
+    suspend fun searchMoviesOnline(
+        query: String,
+        categoryFilter: String,
+        yearFilter: Int?,
+        languageFilter: String,
+        localeConfig: RegionLocaleConfig
+    ): List<Movie> = coroutineScope {
+        val trimmed = query.trim()
+        val hasQuery = trimmed.isNotEmpty()
+        val tmdbEnabled = NetworkModule.hasValidTmdbKey()
+        val isMediaTypeFilter = categoryFilter in MediaContentType.allTypes
+
+        if (!hasQuery && categoryFilter == "all" && yearFilter == null && languageFilter == "Toutes") {
+            return@coroutineScope videoMetadataDao.observeAllVideos().first().map { it.toMovie() }
+        }
+
+        val safeTerm = trimmed.replace("\"", "").replace("(", "").replace(")", "")
+        val archiveQueryParts = mutableListOf("mediatype:movies")
+        if (hasQuery) {
+            archiveQueryParts.add("(title:($safeTerm) OR creator:($safeTerm) OR subject:($safeTerm) OR description:($safeTerm))")
+        } else {
+            archiveQueryParts.add("(collection:feature_films OR collection:animationandcartoons OR collection:opensource_movies OR collection:SciFi_Horror)")
+        }
+        when (categoryFilter) {
+            MediaContentType.CARTOON, "Animation" -> archiveQueryParts.add("collection:animationandcartoons")
+            MediaContentType.SERIES -> archiveQueryParts.add("(subject:television OR subject:series OR collection:classic_tv)")
+            MediaContentType.MUSIC -> archiveQueryParts.add("(subject:music OR subject:concert OR subject:chanson)")
+            MediaContentType.THEATER -> archiveQueryParts.add("(subject:theater OR subject:theatre OR subject:moliere)")
+            "Classiques" -> archiveQueryParts.add("collection:feature_films")
+            "Science-Fiction" -> archiveQueryParts.add("(collection:SciFi_Horror OR subject:\"science fiction\")")
+            "Documentaire" -> archiveQueryParts.add("(collection:nasa OR subject:documentary)")
+        }
+        if (yearFilter != null) {
+            archiveQueryParts.add("year:$yearFilter")
+        }
+        when {
+            languageFilter == "Français" || localeConfig.frenchOnly ->
+                archiveQueryParts.add("(language:fre OR language:French OR language:fra)")
+            languageFilter == "Anglais" -> archiveQueryParts.add("(language:eng OR language:English)")
+            languageFilter == "Espagnol" -> archiveQueryParts.add("(language:spa OR language:Spanish)")
+        }
+
+        val archiveDeferred = async {
+            val results = runCatching {
+                archiveOrgApi.searchMovies(
+                    query = archiveQueryParts.joinToString(" AND "),
+                    rows = 24
+                ).response?.docs.orEmpty().mapNotNull { doc ->
+                    doc.toMovie(
+                        localeConfig = localeConfig,
+                        overrideMediaType = if (isMediaTypeFilter) categoryFilter else null
+                    )
+                }
+            }.getOrDefault(emptyList())
+            if (localeConfig.frenchOnly) results.map { it.copy(language = "Français") } else results
+        }
+
+        val tmdbMoviesDeferred = async {
+            if (!tmdbEnabled || categoryFilter == MediaContentType.SERIES) emptyList()
+            else runCatching {
+                val results = if (hasQuery) {
+                    tmdbApi.searchMovies(
+                        query = trimmed,
+                        language = localeConfig.tmdbLanguage,
+                        region = localeConfig.regionCode,
+                        year = yearFilter
+                    ).results
+                } else {
+                    val genreId = when (categoryFilter) {
+                        MediaContentType.CARTOON -> "16"
+                        MediaContentType.MUSIC -> "10402"
+                        MediaContentType.THEATER -> "18"
+                        else -> cachedGenreMap.entries.firstOrNull {
+                            it.value.equals(categoryFilter, ignoreCase = true)
+                        }?.key?.toString()
+                    }
+                    val origLang = when (languageFilter) {
+                        "Français" -> "fr"
+                        "Anglais" -> "en"
+                        "Espagnol" -> "es"
+                        else -> null
+                    }
+                    tmdbApi.discoverMovies(
+                        language = localeConfig.tmdbLanguage,
+                        region = localeConfig.regionCode,
+                        genreIds = genreId,
+                        keywords = if (categoryFilter == MediaContentType.THEATER) "10181|4344" else null,
+                        year = yearFilter,
+                        originalLanguage = origLang
+                    ).results
+                }
+                results.map {
+                    it.toMovie(
+                        genreMap = cachedGenreMap,
+                        localeConfig = localeConfig,
+                        overrideMediaType = if (isMediaTypeFilter) categoryFilter else null
+                    )
+                }
+            }.getOrDefault(emptyList())
+        }
+
+        val tmdbTvDeferred = async {
+            if (!tmdbEnabled || (isMediaTypeFilter && categoryFilter != MediaContentType.SERIES && categoryFilter != MediaContentType.CARTOON)) {
+                emptyList()
+            } else runCatching {
+                val tvResults = if (hasQuery) {
+                    tmdbApi.searchTv(
+                        query = trimmed,
+                        language = localeConfig.tmdbLanguage,
+                        year = yearFilter
+                    ).results
+                } else {
+                    tmdbApi.discoverTv(
+                        language = localeConfig.tmdbLanguage,
+                        genreIds = if (categoryFilter == MediaContentType.CARTOON) "16" else null,
+                        year = yearFilter
+                    ).results
+                }
+                tvResults.map {
+                    it.toMovie(
+                        genreMap = cachedTvGenreMap.ifEmpty { cachedGenreMap },
+                        localeConfig = localeConfig,
+                        overrideMediaType = if (categoryFilter == MediaContentType.CARTOON) {
+                            MediaContentType.CARTOON
+                        } else {
+                            MediaContentType.SERIES
+                        }
+                    )
+                }
+            }.getOrDefault(emptyList())
+        }
+
+        val networkResults = (tmdbMoviesDeferred.await() + tmdbTvDeferred.await() + archiveDeferred.await())
+            .distinctBy { it.id }
+
+        if (networkResults.isNotEmpty()) {
+            videoMetadataDao.upsertAll(networkResults.map { it.toVideoMetadataEntity() })
+            return@coroutineScope networkResults.filter { movie ->
+                val matchesYear = yearFilter == null || movie.releaseYear == yearFilter
+                val matchesLanguage = languageFilter == "Toutes" || movie.language.contains(languageFilter, ignoreCase = true)
+                val matchesCat = categoryFilter == "all" ||
+                    movie.mediaType == categoryFilter ||
+                    movie.category.equals(categoryFilter, ignoreCase = true) ||
+                    movie.genres.any { it.equals(categoryFilter, ignoreCase = true) }
+                matchesYear && matchesLanguage && matchesCat
+            }
+        }
+
+        // Local Room fallback
+        val cached = videoMetadataDao.searchVideos(
+            query = trimmed,
+            category = if (isMediaTypeFilter) "all" else categoryFilter,
+            year = yearFilter,
+            language = languageFilter
+        ).first().map { it.toMovie() }
+        if (isMediaTypeFilter) cached.filter { it.mediaType == categoryFilter } else cached
+    }
+
+    suspend fun fetchMovieDetails(
+        movie: Movie,
+        localeConfig: RegionLocaleConfig
+    ): EnrichedMovieResult {
+        val isTmdbTv = movie.id.startsWith("tmdb_tv_") ||
+            (movie.sourceType == MovieSourceType.TMDB && movie.mediaType == MediaContentType.SERIES)
+
+        if (isTmdbTv && movie.tmdbId != null && NetworkModule.hasValidTmdbKey()) {
+            val details = runCatching {
+                tmdbApi.getTvDetails(
+                    tvId = movie.tmdbId,
+                    language = localeConfig.tmdbLanguage,
+                    includeVideoLanguage = localeConfig.includeVideoLanguage,
+                    includeImageLanguage = localeConfig.includeImageLanguage
+                )
+            }.getOrNull()
+
+            if (details != null) {
+                val enFallback = if (!localeConfig.frenchOnly &&
+                    (details.overview.isNullOrBlank() || details.videos?.results.isNullOrEmpty()) &&
+                    localeConfig.languageCode != "en"
+                ) {
+                    runCatching {
+                        tmdbApi.getTvDetails(
+                            tvId = movie.tmdbId,
+                            language = "en-US",
+                            includeVideoLanguage = "en,null",
+                            includeImageLanguage = "en,null"
+                        )
+                    }.getOrNull()
+                } else if (localeConfig.frenchOnly && details.videos?.results.isNullOrEmpty()) {
+                    // Only grab official trailer video key if French trailer is absent, never replace French synopsis
+                    runCatching {
+                        tmdbApi.getTvDetails(
+                            tvId = movie.tmdbId,
+                            language = localeConfig.tmdbLanguage,
+                            includeVideoLanguage = "fr,en,null",
+                            includeImageLanguage = localeConfig.includeImageLanguage
+                        )
+                    }.getOrNull()?.let { vidDto -> vidDto.copy(overview = details.overview) }
+                } else {
+                    null
+                }
+                val enriched = details.enrichMovie(movie, enFallback)
+                videoMetadataDao.upsertVideo(enriched.toVideoMetadataEntity())
+                return EnrichedMovieResult(movie = enriched)
+            }
+        }
+
+        if (movie.sourceType == MovieSourceType.TMDB && movie.tmdbId != null && NetworkModule.hasValidTmdbKey()) {
+            val details = runCatching {
+                tmdbApi.getMovieDetails(
+                    movieId = movie.tmdbId,
+                    language = localeConfig.tmdbLanguage,
+                    includeVideoLanguage = localeConfig.includeVideoLanguage,
+                    includeImageLanguage = localeConfig.includeImageLanguage
+                )
+            }.getOrNull()
+
+            if (details != null) {
+                val enFallback = if (!localeConfig.frenchOnly &&
+                    (details.overview.isNullOrBlank() || details.videos?.results.isNullOrEmpty()) &&
+                    localeConfig.languageCode != "en"
+                ) {
+                    runCatching {
+                        tmdbApi.getMovieDetails(
+                            movieId = movie.tmdbId,
+                            language = "en-US",
+                            includeVideoLanguage = "en,null",
+                            includeImageLanguage = "en,null"
+                        )
+                    }.getOrNull()
+                } else if (localeConfig.frenchOnly && details.videos?.results.isNullOrEmpty()) {
+                    runCatching {
+                        tmdbApi.getMovieDetails(
+                            movieId = movie.tmdbId,
+                            language = localeConfig.tmdbLanguage,
+                            includeVideoLanguage = "fr,en,null",
+                            includeImageLanguage = localeConfig.includeImageLanguage
+                        )
+                    }.getOrNull()?.let { vidDto -> vidDto.copy(overview = details.overview) }
+                } else {
+                    null
+                }
+                val enriched = details.enrichMovie(movie, enFallback)
+                videoMetadataDao.upsertVideo(enriched.toVideoMetadataEntity())
+                return EnrichedMovieResult(movie = enriched)
+            }
+        }
+
+        val archiveId = movie.archiveIdentifier ?: movie.id.takeIf { it.startsWith("arch_") }?.removePrefix("arch_")
+        if (!archiveId.isNullOrBlank()) {
+            val metadataResp = runCatching { archiveOrgApi.getItemMetadata(archiveId) }.getOrNull()
+            if (metadataResp != null) {
+                val result = metadataResp.enrichMovie(movie)
+                videoMetadataDao.upsertVideo(result.movie.toVideoMetadataEntity())
+                return result
+            }
+        }
+
+        return EnrichedMovieResult(movie = movie)
+    }
+
+    suspend fun fetchSeriesSeasonEpisodes(
+        tvId: Int,
+        seasonNumber: Int,
+        localeConfig: RegionLocaleConfig
+    ): List<SeriesEpisode> {
+        if (!NetworkModule.hasValidTmdbKey()) return emptyList()
+        return runCatching {
+            tmdbApi.getTvSeasonDetails(
+                tvId = tvId,
+                seasonNumber = seasonNumber,
+                language = localeConfig.tmdbLanguage
+            ).toEpisodes()
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun fetchUpcomingReleases(localeConfig: RegionLocaleConfig): List<UpcomingMovie> {
+        if (NetworkModule.hasValidTmdbKey()) {
+            val tmdbUpcoming = runCatching {
+                if (cachedGenreMap.isEmpty()) {
+                    cachedGenreMap = runCatching {
+                        tmdbApi.getGenres(localeConfig.tmdbLanguage).genres.associate { it.id to it.name }
+                    }.getOrDefault(emptyMap())
+                }
+                tmdbApi.getUpcomingMovies(
+                    language = localeConfig.tmdbLanguage,
+                    region = localeConfig.regionCode
+                ).results
+                    .let { list ->
+                        if (localeConfig.frenchOnly) list.filter { !it.overview.isNullOrBlank() }.ifEmpty { list }
+                        else list
+                    }
+                    .map { it.toUpcomingMovie(cachedGenreMap) }
+            }.getOrDefault(emptyList())
+
+            if (tmdbUpcoming.isNotEmpty()) return tmdbUpcoming
+        }
+
+        return runCatching {
+            archiveOrgApi.searchMovies(
+                query = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies) AND ${localeConfig.archiveLanguageQuery}",
+                sort = "addeddate desc",
+                rows = 12
+            ).response?.docs.orEmpty().mapNotNull { it.toUpcomingMovie(localeConfig) }
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun verifyTmdbConnection(localeConfig: RegionLocaleConfig): Result<String> {
+        if (!NetworkModule.hasValidTmdbKey()) {
+            return Result.failure(IllegalStateException("Aucune clé API TMDB active détectée."))
+        }
+        return runCatching {
+            val genres = tmdbApi.getGenres(localeConfig.tmdbLanguage).genres
+            val trending = tmdbApi.getTrendingMovies(localeConfig.tmdbLanguage).results
+            val mode = if (NetworkModule.isV4BearerToken()) "Jeton v4 Bearer" else "Clé v3"
+            "Connexion TMDB réussie ($mode) • ${genres.size} genres et ${trending.size} tendances en français (${localeConfig.tmdbLanguage})"
         }
     }
 
@@ -406,12 +1041,39 @@ class MovieRepository(
     fun getAllDownloads(): Flow<List<DownloadEntity>> = downloadDao.getAllDownloads()
     fun observeDownloadsWithMetadata(): Flow<List<VideoDownloadWithMetadata>> = downloadDao.observeDownloadsWithMetadata()
     fun observeTotalDownloadedBytes(): Flow<Long> = downloadDao.observeTotalDownloadedBytes()
+    fun observeTotalOriginalBytes(): Flow<Long> = downloadDao.observeTotalOriginalBytes()
     fun observeDownload(movieId: String): Flow<DownloadEntity?> = downloadDao.observeDownload(movieId)
 
-    suspend fun startDownload(movie: Movie, quality: String = "Auto (1080p)", wifiOnly: Boolean = false) {
-        // Ensure video metadata is stored locally in Room before queueing download
-        videoMetadataDao.upsertVideo(movie.toVideoMetadataEntity())
-        downloadManager.startOrResumeDownload(movie, quality = quality, wifiOnly = wifiOnly)
+    suspend fun startDownload(
+        movie: Movie,
+        quality: String = "Auto",
+        compressionPreset: SpaceCompressionPreset = SpaceCompressionPreset.SERIES_SAVER,
+        wifiOnly: Boolean = false
+    ) {
+        val enrichedResult = if (movie.sourceType == MovieSourceType.ARCHIVE_ORG) {
+            fetchMovieDetails(movie, RegionLocaleConfig.fromPreference("Français uniquement"))
+        } else {
+            EnrichedMovieResult(movie = movie)
+        }
+        val resolvedMovie = enrichedResult.movie
+        if (!resolvedMovie.isDownloadable || resolvedMovie.videoUrl.isBlank()) return
+
+        val selectedVariant = VideoSpaceCompressor.selectVariant(
+            fallbackUrl = resolvedMovie.videoUrl,
+            qualityUrls = enrichedResult.qualityUrls,
+            qualitySizesBytes = enrichedResult.qualitySizesBytes,
+            preset = compressionPreset
+        )
+
+        videoMetadataDao.upsertVideo(resolvedMovie.toVideoMetadataEntity())
+        downloadManager.startOrResumeDownload(
+            movie = resolvedMovie,
+            quality = if (selectedVariant.qualityLabel.isNotBlank()) selectedVariant.qualityLabel else quality,
+            wifiOnly = wifiOnly,
+            overrideStreamUrl = selectedVariant.streamUrl,
+            originalHdBytes = selectedVariant.originalHdBytes,
+            compressionMode = compressionPreset.id
+        )
     }
 
     suspend fun pauseDownload(movieId: String) {
@@ -419,9 +1081,16 @@ class MovieRepository(
     }
 
     suspend fun resumeDownload(movieId: String, wifiOnly: Boolean = false) {
-        val movie = videoMetadataDao.getVideoById(movieId)?.toMovie() ?: getMovieById(movieId) ?: return
-        val existingQuality = downloadDao.getDownload(movieId)?.quality ?: "Auto (1080p)"
-        downloadManager.startOrResumeDownload(movie, quality = existingQuality, wifiOnly = wifiOnly)
+        val movie = videoMetadataDao.getVideoById(movieId)?.toMovie() ?: return
+        val existing = downloadDao.getDownload(movieId)
+        downloadManager.startOrResumeDownload(
+            movie = movie,
+            quality = existing?.quality ?: "Auto",
+            wifiOnly = wifiOnly,
+            overrideStreamUrl = existing?.videoUrl?.takeIf { it.isNotBlank() },
+            originalHdBytes = existing?.originalSizeBytes ?: 0L,
+            compressionMode = existing?.compressionMode ?: SpaceCompressionPreset.SERIES_SAVER.id
+        )
     }
 
     suspend fun deleteDownload(movieId: String) {

@@ -4,6 +4,8 @@ import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import androidx.room.Relation
+import com.example.gpnflix.data.model.MediaContentType
+import com.example.gpnflix.data.model.SpaceCompressionPreset
 
 object DownloadStatus {
     const val QUEUED = "QUEUED"
@@ -23,6 +25,9 @@ data class DownloadEntity(
     val quality: String = "Auto",
     val fileSizeBytes: Long = 0L,
     val downloadedBytes: Long = 0L,
+    val originalSizeBytes: Long = 0L,
+    val compressionMode: String = SpaceCompressionPreset.SERIES_SAVER.id,
+    val mediaType: String = MediaContentType.FILM,
     val status: String = DownloadStatus.QUEUED,
     val progressPercent: Int = 0,
     val errorMessage: String? = null,
@@ -35,6 +40,20 @@ data class DownloadEntity(
     val isPaused: Boolean get() = status == DownloadStatus.PAUSED
     val isFailed: Boolean get() = status == DownloadStatus.FAILED
     val isActive: Boolean get() = status == DownloadStatus.QUEUED || status == DownloadStatus.DOWNLOADING
+
+    val savedBytes: Long
+        get() = if (originalSizeBytes > fileSizeBytes && fileSizeBytes > 0L) {
+            (originalSizeBytes - fileSizeBytes).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+
+    val compressionSavingsPercent: Int
+        get() = if (originalSizeBytes > 0L && savedBytes > 0L) {
+            ((savedBytes * 100L) / originalSizeBytes).toInt().coerceIn(0, 90)
+        } else {
+            0
+        }
 }
 
 data class VideoDownloadWithMetadata(

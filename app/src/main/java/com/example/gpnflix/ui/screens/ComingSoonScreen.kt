@@ -29,20 +29,20 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -51,9 +51,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.gpnflix.data.model.Movie
+import com.example.gpnflix.data.model.MovieSourceType
 import com.example.gpnflix.data.model.UpcomingMovie
 import com.example.gpnflix.ui.viewmodel.GpnFlixViewModel
 
@@ -64,7 +66,9 @@ fun ComingSoonScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val upcomingMovies = viewModel.upcomingMovies
+    val upcomingMovies by viewModel.upcomingMoviesState.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoadingUpcoming.collectAsStateWithLifecycle()
+    val regionLocale by viewModel.regionLocale.collectAsStateWithLifecycle()
     val notifiedMap = remember { mutableStateMapOf<String, Boolean>() }
 
     Scaffold(
@@ -87,14 +91,14 @@ fun ComingSoonScreen(
                             modifier = Modifier.padding(end = 8.dp)
                         )
                         Text(
-                            text = "Prochainement sur GpnFlix",
+                            text = "À venir (${regionLocale.displayLabel})",
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Les futures sorties open-source, restaurations et documentaires libres",
+                        text = "Prochaines sorties cinéma officielles et nouveaux ajouts du domaine public",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -102,46 +106,87 @@ fun ComingSoonScreen(
             }
         }
     ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .testTag("coming_soon_list"),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
-        ) {
-            items(upcomingMovies, key = { it.id }) { item ->
-                UpcomingMovieCard(
-                    item = item,
-                    isNotified = notifiedMap[item.id] == true,
-                    onToggleNotification = {
-                        val newState = !(notifiedMap[item.id] ?: false)
-                        notifiedMap[item.id] = newState
-                        val msg = if (newState) "Rappel activé pour ${item.title}" else "Rappel désactivé"
-                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                    },
-                    onPlayTrailer = {
-                        // Create a temporary movie object for the trailer player
-                        val trailerMovie = Movie(
-                            id = item.id,
-                            title = "Bande-annonce : ${item.title}",
-                            originalTitle = item.title,
-                            synopsis = item.synopsis,
-                            durationMinutes = 2,
-                            releaseYear = 2026,
-                            rating = 5.0f,
-                            posterUrl = item.posterUrl,
-                            backdropUrl = item.backdropUrl,
-                            videoUrl = item.trailerUrl,
-                            category = item.category,
-                            genres = listOf(item.category),
-                            director = "Équipe Open Source",
-                            cast = listOf("Communauté mondiale"),
-                            licenseType = item.licenseNotice
+        when {
+            isLoading && upcomingMovies.isEmpty() -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
+            }
+
+            upcomingMovies.isEmpty() -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "Aucune sortie à venir trouvée.",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        onPlayTrailer(trailerMovie)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = { viewModel.loadUpcomingMovies() }) {
+                            Text("Actualiser")
+                        }
                     }
-                )
+                }
+            }
+
+            else -> {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .testTag("coming_soon_list"),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    items(upcomingMovies, key = { it.id }) { item ->
+                        UpcomingMovieCard(
+                            item = item,
+                            isNotified = notifiedMap[item.id] == true,
+                            onToggleNotification = {
+                                val newState = !(notifiedMap[item.id] ?: false)
+                                notifiedMap[item.id] = newState
+                                val msg = if (newState) "Rappel activé pour ${item.title}" else "Rappel désactivé"
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            },
+                            onPlayTrailer = {
+                                val movieForPlayer = Movie(
+                                    id = item.id,
+                                    title = item.title,
+                                    originalTitle = item.title,
+                                    synopsis = item.synopsis,
+                                    durationMinutes = 0,
+                                    releaseYear = item.expectedReleaseDate.take(4).toIntOrNull() ?: 0,
+                                    rating = 0f,
+                                    posterUrl = item.posterUrl,
+                                    backdropUrl = item.backdropUrl,
+                                    videoUrl = "",
+                                    trailerUrl = item.trailerUrl,
+                                    trailerYoutubeKey = item.trailerYoutubeKey,
+                                    sourceType = if (item.tmdbId != null) MovieSourceType.TMDB else MovieSourceType.ARCHIVE_ORG,
+                                    tmdbId = item.tmdbId,
+                                    archiveIdentifier = item.archiveIdentifier,
+                                    category = item.category,
+                                    genres = listOf(item.category),
+                                    director = "",
+                                    cast = emptyList(),
+                                    licenseType = item.licenseNotice
+                                )
+                                onPlayTrailer(movieForPlayer)
+                            }
+                        )
+                    }
+                }
             }
         }
     }
@@ -161,34 +206,35 @@ fun UpcomingMovieCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column {
-            // Backdrop with play teaser overlay
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
+                    .background(MaterialTheme.colorScheme.surface)
             ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(item.backdropUrl)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
+                val image = item.backdropUrl.ifBlank { item.posterUrl }
+                if (image.isNotBlank()) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(image)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
 
-                // Dark gradient
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
                             Brush.verticalGradient(
-                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f))
+                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f))
                             )
                         )
                 )
 
-                // Release Date pill
                 Surface(
                     shape = RoundedCornerShape(6.dp),
                     color = MaterialTheme.colorScheme.primary,
@@ -216,7 +262,6 @@ fun UpcomingMovieCard(
                 }
             }
 
-            // Info & Description
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
                     text = item.title,
@@ -241,7 +286,6 @@ fun UpcomingMovieCard(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Actions row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -257,7 +301,10 @@ fun UpcomingMovieCard(
                     ) {
                         Icon(imageVector = Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Bande-annonce", fontWeight = FontWeight.Bold)
+                        Text(
+                            text = if (item.tmdbId != null) "Bande-annonce" else "Regarder",
+                            fontWeight = FontWeight.Bold
+                        )
                     }
 
                     OutlinedButton(

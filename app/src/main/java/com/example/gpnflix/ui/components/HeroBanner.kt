@@ -1,13 +1,11 @@
 package com.example.gpnflix.ui.components
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,17 +16,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,12 +42,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.gpnflix.data.model.Movie
+import com.example.gpnflix.data.model.MovieSourceType
 import kotlinx.coroutines.delay
 
 @Composable
@@ -66,10 +65,9 @@ fun HeroBannerCarousel(
 
     val pagerState = rememberPagerState(pageCount = { featuredMovies.size })
 
-    // Auto-scroll every 6 seconds
-    LaunchedEffect(pagerState) {
+    LaunchedEffect(pagerState, featuredMovies.size) {
         while (true) {
-            delay(6000)
+            delay(6500)
             if (!pagerState.isScrollInProgress && featuredMovies.size > 1) {
                 val nextPage = (pagerState.currentPage + 1) % featuredMovies.size
                 pagerState.animateScrollToPage(nextPage)
@@ -77,198 +75,261 @@ fun HeroBannerCarousel(
         }
     }
 
-    Box(
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(410.dp)
-            .testTag("hero_banner_carousel")
+            .testTag("hero_banner_carousel"),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         HorizontalPager(
             state = pagerState,
-            modifier = Modifier.fillMaxSize()
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            pageSpacing = 12.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(455.dp)
         ) { page ->
             val movie = featuredMovies[page]
             val isFavorite = favorites.any { it.id == movie.id }
+            val heroImage = movie.posterUrl.ifBlank { movie.backdropUrl }
 
-            Box(modifier = Modifier.fillMaxSize()) {
-                // Backdrop Image with crossfade
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(movie.backdropUrl)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = "Bannière ${movie.title}",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-
-                // Multi-stop Cinematic Scrim
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                0.0f to Color.Black.copy(alpha = 0.3f),
-                                0.4f to Color.Transparent,
-                                0.75f to MaterialTheme.colorScheme.background.copy(alpha = 0.85f),
-                                1.0f to MaterialTheme.colorScheme.background
-                            )
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shadowElevation = 10.dp
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    if (heroImage.isNotBlank()) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(heroImage)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = "Affiche vedette ${movie.title}",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
                         )
-                )
-
-                // Info overlay
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(horizontal = 16.dp, vertical = 20.dp)
-                ) {
-                    // Badges row
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = MaterialTheme.colorScheme.primary
+                    } else {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = "100% LÉGAL",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 10.sp
-                                ),
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = Color.Black.copy(alpha = 0.6f)
-                        ) {
-                            Text(
-                                text = "ULTRA HD",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 10.sp
-                                ),
-                                color = MaterialTheme.colorScheme.tertiary,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Filled.Star,
+                                imageVector = Icons.Filled.Movie,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = "${movie.rating}",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = Color.White
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+                                modifier = Modifier.size(72.dp)
                             )
                         }
-
-                        Text(
-                            text = "• ${movie.releaseYear} • ${movie.formattedDuration}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.85f)
-                        )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = movie.title,
-                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Black),
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                    // Netflix-style rich bottom cinema scrim
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    0.0f to Color.Black.copy(alpha = 0.25f),
+                                    0.40f to Color.Transparent,
+                                    0.70f to Color(0xFF090A0F).copy(alpha = 0.78f),
+                                    1.0f to Color(0xFF090A0F).copy(alpha = 0.96f)
+                                )
+                            )
                     )
 
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Text(
-                        text = movie.synopsis,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.8f),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Buttons
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    // Centered Netflix Mobile Hero Content
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Button(
-                            onClick = { onPlayClick(movie) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(46.dp)
-                                .testTag("hero_play_button_${movie.id}"),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = Color.White
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(3.dp),
+                                color = MaterialTheme.colorScheme.primary
+                            ) {
+                                Text(
+                                    text = "G",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 11.sp
+                                    ),
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = movie.legalAccessLabel.uppercase(),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.5.sp,
+                                    fontSize = 10.sp
+                                ),
+                                color = Color.White.copy(alpha = 0.9f)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text(
+                            text = movie.title,
+                            style = MaterialTheme.typography.headlineMedium.copy(
+                                fontWeight = FontWeight.Black,
+                                fontSize = 26.sp,
+                                lineHeight = 30.sp
                             ),
-                            shape = RoundedCornerShape(8.dp)
+                            color = Color.White,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        val tagsLine = buildList {
+                            if (movie.genres.isNotEmpty()) addAll(movie.genres.take(2))
+                            else if (movie.category.isNotBlank()) add(movie.category)
+                            if (movie.releaseYear > 0) add(movie.releaseYear.toString())
+                        }.joinToString(" • ")
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.PlayArrow,
-                                contentDescription = "Lecture",
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(text = "Regarder", fontWeight = FontWeight.Bold)
+                            if (movie.rating > 0f) {
+                                Icon(
+                                    imageVector = Icons.Filled.Star,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = String.format("%.1f", movie.rating),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = Color.White
+                                )
+                                if (tagsLine.isNotEmpty()) {
+                                    Text(
+                                        text = " • ",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.White.copy(alpha = 0.65f)
+                                    )
+                                }
+                            }
+                            if (tagsLine.isNotEmpty()) {
+                                Text(
+                                    text = tagsLine,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White.copy(alpha = 0.88f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
 
-                        FilledTonalButton(
-                            onClick = { onDetailsClick(movie) },
-                            modifier = Modifier
-                                .height(46.dp)
-                                .testTag("hero_details_button_${movie.id}"),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Info,
-                                contentDescription = "Détails",
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(text = "Détails")
-                        }
+                        Spacer(modifier = Modifier.height(14.dp))
 
-                        IconButton(
-                            onClick = { onToggleFavorite(movie) },
-                            modifier = Modifier
-                                .size(46.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.18f))
-                                .testTag("hero_fav_button_${movie.id}")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                imageVector = if (isFavorite) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
-                                contentDescription = "Favoris",
-                                tint = if (isFavorite) MaterialTheme.colorScheme.secondary else Color.White
-                            )
+                            // Crisp Netflix White Play Button
+                            Button(
+                                onClick = { onPlayClick(movie) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("hero_play_button_${movie.id}"),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color.White,
+                                    contentColor = Color.Black
+                                ),
+                                shape = RoundedCornerShape(6.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.PlayArrow,
+                                    contentDescription = "Lecture",
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (movie.sourceType == MovieSourceType.TMDB && !movie.hasDirectStream) {
+                                        "Bande-annonce"
+                                    } else {
+                                        "Lecture"
+                                    },
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    maxLines = 1
+                                )
+                            }
+
+                            // Netflix Translucent "+ Ma Liste" Button
+                            Button(
+                                onClick = { onToggleFavorite(movie) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("hero_fav_button_${movie.id}"),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color.White.copy(alpha = 0.18f),
+                                    contentColor = Color.White
+                                ),
+                                shape = RoundedCornerShape(6.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isFavorite) Icons.Filled.Check else Icons.Filled.Add,
+                                    contentDescription = "Ma Liste",
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (isFavorite) "Dans Ma liste" else "Ma liste",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp,
+                                    maxLines = 1
+                                )
+                            }
+
+                            // Compact Info Button
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color.White.copy(alpha = 0.14f),
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                IconButton(
+                                    onClick = { onDetailsClick(movie) },
+                                    modifier = Modifier.testTag("hero_details_button_${movie.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Info,
+                                        contentDescription = "Infos sur ${movie.title}",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Pager indicator dots at bottom center
         if (featuredMovies.size > 1) {
+            Spacer(modifier = Modifier.height(10.dp))
             Row(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -281,7 +342,7 @@ fun HeroBannerCarousel(
                             .clip(RoundedCornerShape(2.dp))
                             .background(
                                 if (isSelected) MaterialTheme.colorScheme.primary
-                                else Color.White.copy(alpha = 0.4f)
+                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
                             )
                     )
                 }
@@ -290,7 +351,6 @@ fun HeroBannerCarousel(
     }
 }
 
-// Backward compatible single HeroBanner overload
 @Composable
 fun HeroBanner(
     movie: Movie,

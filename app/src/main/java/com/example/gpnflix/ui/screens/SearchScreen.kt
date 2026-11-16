@@ -1,8 +1,5 @@
 package com.example.gpnflix.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -27,18 +24,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -54,7 +49,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +56,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.gpnflix.data.model.MediaContentType
 import com.example.gpnflix.data.model.Movie
 import com.example.gpnflix.ui.components.CategoryChip
 import com.example.gpnflix.ui.components.MovieCard
@@ -75,24 +70,36 @@ fun SearchScreen(
 ) {
     val searchFilter by viewModel.searchFilter.collectAsStateWithLifecycle()
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
+    val isSearching by viewModel.isSearching.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
 
     var selectedSortOption by remember { mutableStateOf("Pertinence") }
     var showSortDialog by remember { mutableStateOf(false) }
 
-    val categories = listOf("all", "Animation", "Classiques", "Science-Fiction", "Documentaire")
+    val categories = listOf(
+        "all",
+        MediaContentType.FILM,
+        MediaContentType.SERIES,
+        MediaContentType.MUSIC,
+        MediaContentType.CARTOON,
+        MediaContentType.THEATER,
+        "Science-Fiction",
+        "Documentaire"
+    )
     val categoryLabels = mapOf(
-        "all" to "Toutes catégories",
-        "Animation" to "Animation",
-        "Classiques" to "Classiques",
+        "all" to "Tout (FR)",
+        MediaContentType.FILM to "Films",
+        MediaContentType.SERIES to "Séries",
+        MediaContentType.MUSIC to "Musique",
+        MediaContentType.CARTOON to "Dessins animés",
+        MediaContentType.THEATER to "Théâtre",
         "Science-Fiction" to "Sci-Fi",
-        "Documentaire" to "Docu"
+        "Documentaire" to "Documentaires"
     )
 
-    val languages = listOf("Toutes", "Français", "Anglais", "Muet")
-    val trendingKeywords = listOf("Blender 3D", "NASA", "Domaine Public", "Metropolis", "Sintel", "Horreur", "Restauré 4K")
+    val languages = listOf("Français", "Toutes", "Anglais", "Espagnol")
+    val trendingKeywords = listOf("Méliès", "Molière", "Lupin", "Concert", "Astérix", "NASA", "Chaplin")
 
-    // Sorted results
     val displayedResults = remember(searchResults, selectedSortOption) {
         when (selectedSortOption) {
             "Note décroissante" -> searchResults.sortedByDescending { it.rating }
@@ -112,7 +119,6 @@ fun SearchScreen(
                 .padding(innerPadding)
                 .statusBarsPadding()
         ) {
-            // Search Input Header
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 2.dp,
@@ -120,7 +126,7 @@ fun SearchScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Explorer le catalogue",
+                        text = "Rechercher un film",
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -134,7 +140,7 @@ fun SearchScreen(
                             .testTag("search_text_input"),
                         placeholder = {
                             Text(
-                                "Titre, réalisateur, acteur, genre...",
+                                "Titre, réalisateur, mot-clé...",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         },
@@ -169,12 +175,18 @@ fun SearchScreen(
                 }
             }
 
-            // Trending Keywords suggestions when query is empty
+            if (isSearching) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
             if (searchFilter.query.isEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
@@ -185,7 +197,7 @@ fun SearchScreen(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Suggestions :",
+                        text = "Idées :",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -209,14 +221,12 @@ fun SearchScreen(
                 }
             }
 
-            // Filter Chips Rows
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
                     .padding(vertical = 8.dp)
             ) {
-                // Category Filter
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -232,7 +242,6 @@ fun SearchScreen(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Language Filters & Sort button
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -270,7 +279,6 @@ fun SearchScreen(
                         }
                     }
 
-                    // Sort button
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -297,7 +305,6 @@ fun SearchScreen(
                 }
             }
 
-            // Results count and reset button
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -306,7 +313,7 @@ fun SearchScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "${displayedResults.size} œuvre(s) légale(s) trouvée(s)",
+                    text = if (isSearching) "Recherche en cours..." else "${displayedResults.size} résultat(s)",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -316,13 +323,12 @@ fun SearchScreen(
                         onClick = { viewModel.resetFilters() },
                         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.primary)
                     ) {
-                        Text("Réinitialiser les filtres", style = MaterialTheme.typography.labelSmall)
+                        Text("Réinitialiser", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
 
-            if (displayedResults.isEmpty()) {
-                // Empty state
+            if (!isSearching && displayedResults.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -352,7 +358,7 @@ fun SearchScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Essayez un autre mot-clé ou réinitialisez les filtres de recherche.",
+                            text = "Essayez un autre titre, un réalisateur ou réinitialisez les filtres.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 16.dp)
@@ -372,7 +378,8 @@ fun SearchScreen(
                     items(displayedResults, key = { it.id }) { movie ->
                         MovieCard(
                             movie = movie,
-                            onClick = { onMovieClick(movie) }
+                            onClick = { onMovieClick(movie) },
+                            aspectRatio = if (movie.mediaType == MediaContentType.MUSIC) 1.0f else 0.68f
                         )
                     }
                 }
@@ -380,7 +387,6 @@ fun SearchScreen(
         }
     }
 
-    // Sort selection dialog
     if (showSortDialog) {
         val sortOptions = listOf("Pertinence", "Note décroissante", "Plus récents", "Titre (A-Z)")
         AlertDialog(

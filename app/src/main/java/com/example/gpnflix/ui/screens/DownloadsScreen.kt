@@ -1,6 +1,7 @@
 package com.example.gpnflix.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,11 +17,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -28,11 +31,11 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -42,10 +45,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -58,6 +64,7 @@ import coil.request.ImageRequest
 import com.example.gpnflix.data.local.DownloadStatus
 import com.example.gpnflix.data.local.VideoDownloadWithMetadata
 import com.example.gpnflix.data.model.Movie
+import com.example.gpnflix.data.model.SpaceCompressionPreset
 import com.example.gpnflix.ui.viewmodel.GpnFlixViewModel
 import java.util.Locale
 
@@ -73,10 +80,17 @@ fun DownloadsScreen(
 
     val downloadsWithMeta by viewModel.downloadsWithMetadata.collectAsStateWithLifecycle()
     val totalBytes by viewModel.totalDownloadedBytes.collectAsStateWithLifecycle()
+    val totalOriginalBytes by viewModel.totalOriginalBytes.collectAsStateWithLifecycle()
+    val userSettings by viewModel.userSettings.collectAsStateWithLifecycle()
     val allMovies by viewModel.moviesState.collectAsStateWithLifecycle()
+
+    var simulatedEpisodeMb by remember { mutableIntStateOf(100) }
 
     val completedCount = remember(downloadsWithMeta) {
         downloadsWithMeta.count { it.download.isCompleted }
+    }
+    val totalSavedBytes = remember(totalOriginalBytes, totalBytes) {
+        if (totalOriginalBytes > totalBytes) totalOriginalBytes - totalBytes else 0L
     }
 
     Scaffold(
@@ -113,7 +127,12 @@ fun DownloadsScreen(
                         )
                         if (downloadsWithMeta.isNotEmpty()) {
                             Text(
-                                text = "$completedCount prêt(s) hors-ligne • Stockage Room : ${formatStorageBytes(totalBytes)}",
+                                text = buildString {
+                                    append("$completedCount prêt(s) • Room : ${formatStorageBytes(totalBytes)}")
+                                    if (totalSavedBytes > 0L) {
+                                        append(" (Économisé : ${formatStorageBytes(totalSavedBytes)})")
+                                    }
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -141,32 +160,100 @@ fun DownloadsScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Legal downloads info card
+            // Smart Space Compressor Card (e.g., 100 Mo -> 50 Mo)
+            val activePreset = userSettings.compressionPreset
+            val compressedSimMb = activePreset.estimateCompressedMb(simulatedEpisodeMb)
+
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .testTag("space_compressor_card"),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
             ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Security,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Filled.Compress,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Compresseur d'espace Séries & Films",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF22C55E).copy(alpha = 0.18f)
+                        ) {
+                            Text(
+                                text = "-${activePreset.savingsPercent}% d'espace",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = Color(0xFF22C55E),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Les métadonnées et l'état de téléchargement sont conservés localement via Room pour garantir une lecture hors-ligne fiable sur contenu libre (CC-BY / Domaine Public).",
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                        text = "Réduisez automatiquement la taille des épisodes : $simulatedEpisodeMb Mo → $compressedSimMb Mo (${activePreset.targetQualityLabel}).",
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(SpaceCompressionPreset.entries) { preset ->
+                            FilterChip(
+                                selected = activePreset == preset,
+                                onClick = { viewModel.setCompressionPreset(preset) },
+                                label = {
+                                    Text(
+                                        text = if (preset == SpaceCompressionPreset.SERIES_SAVER) {
+                                            "Série 100→50 Mo"
+                                        } else {
+                                            preset.label
+                                        },
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Test taille épisode :",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        listOf(50, 100, 500, 1000).forEach { mb ->
+                            FilterChip(
+                                selected = simulatedEpisodeMb == mb,
+                                onClick = { simulatedEpisodeMb = mb },
+                                label = {
+                                    Text(if (mb == 1000) "1 Go" else "$mb Mo", fontSize = 10.sp)
+                                }
+                            )
+                        }
+                    }
                 }
             }
 
@@ -200,7 +287,7 @@ fun DownloadsScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Téléchargez des films autorisés pour continuer à les visionner même sans connexion Internet.",
+                            text = "Téléchargez des films, séries ou dessins animés avec le compresseur activé pour économiser jusqu'à 50% d'espace.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 16.dp)
@@ -211,7 +298,7 @@ fun DownloadsScreen(
                             shape = RoundedCornerShape(8.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                         ) {
-                            Text("Parcourir les films disponibles")
+                            Text("Parcourir les titres disponibles")
                         }
                     }
                 }
@@ -344,13 +431,33 @@ fun DownloadItemCard(
                         }
                     }
 
-                    if (movie != null) {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "${movie.category} • ${movie.formattedDuration} • ${entity.quality}",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = buildString {
+                            append(entity.mediaType)
+                            if (movie != null) append(" • ${movie.formattedDuration}")
+                            append(" • ${entity.quality}")
+                        },
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (entity.savedBytes > 0L) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0xFF22C55E).copy(alpha = 0.16f)
+                        ) {
+                            Text(
+                                text = "Compressé -${entity.compressionSavingsPercent}% (${formatStorageBytes(entity.savedBytes)} économisés)",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = Color(0xFF22C55E),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 }
 
@@ -413,7 +520,6 @@ fun DownloadItemCard(
                     }
                 }
 
-                // Delete button
                 IconButton(
                     onClick = onDeleteClick,
                     modifier = Modifier.testTag("download_delete_${entity.movieId}")

@@ -31,6 +31,9 @@ interface DownloadDao {
     @Query("SELECT COALESCE(SUM(downloadedBytes), 0) FROM downloads")
     fun observeTotalDownloadedBytes(): Flow<Long>
 
+    @Query("SELECT COALESCE(SUM(CASE WHEN originalSizeBytes > fileSizeBytes THEN originalSizeBytes ELSE fileSizeBytes END), 0) FROM downloads WHERE status = 'COMPLETED'")
+    fun observeTotalOriginalBytes(): Flow<Long>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveDownload(entity: DownloadEntity)
 

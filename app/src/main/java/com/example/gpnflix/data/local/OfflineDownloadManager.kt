@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import com.example.gpnflix.data.model.Movie
+import com.example.gpnflix.data.model.SpaceCompressionPreset
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,10 +18,90 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
+
+data class SelectedCompressedStream(
+    val qualityLabel: String,
+    val streamUrl: String,
+    val originalHdBytes: Long,
+    val targetVariantBytes: Long
+)
+
+object VideoSpaceCompressor {
+    /**
+     * Selects the optimal MP4 stream variant matching [preset] (for example reducing a 100 MB HD
+     * episode to ~50 MB with [SpaceCompressionPreset.SERIES_SAVER]) using real available file
+     * variants and size metadata.
+     */
+    fun selectVariant(
+        fallbackUrl: String,
+        qualityUrls: Map<String, String>,
+        qualitySizesBytes: Map<String, Long>,
+        preset: SpaceCompressionPreset
+    ): SelectedCompressedStream {
+        if (qualityUrls.isEmpty()) {
+            return SelectedCompressedStream(
+                qualityLabel = preset.targetQualityLabel,
+                streamUrl = fallbackUrl,
+                originalHdBytes = 0L,
+                targetVariantBytes = 0L
+            )
+        }
+
+        val highestEntry = qualityUrls.entries.first()
+        val highestSize = qualitySizesBytes[highestEntry.key]
+            ?: qualitySizesBytes.values.maxOrNull()
+            ?: 0L
+
+        if (preset == SpaceCompressionPreset.ORIGINAL || qualityUrls.size == 1) {
+            return SelectedCompressedStream(
+                qualityLabel = highestEntry.key,
+                streamUrl = highestEntry.value,
+                originalHdBytes = highestSize,
+                targetVariantBytes = highestSize
+            )
+        }
+
+        // If exact sizes exist across variants, pick the variant closest to highestSize * preset.ratio
+        if (highestSize > 0L && qualitySizesBytes.size >= 2) {
+            val targetBytes = (highestSize * preset.ratio).toLong()
+            val bestMatch = qualityUrls.entries.minByOrNull { (label, _) ->
+                val sz = qualitySizesBytes[label] ?: highestSize
+                abs(sz - targetBytes)
+            }
+            if (bestMatch != null) {
+                val chosenSize = qualitySizesBytes[bestMatch.key] ?: 0L
+                return SelectedCompressedStream(
+                    qualityLabel = "${bestMatch.key} (${preset.label})",
+                    streamUrl = bestMatch.value,
+                    originalHdBytes = highestSize,
+                    targetVariantBytes = chosenSize
+                )
+            }
+        }
+
+        // Fallback ordered selection across quality keys (e.g., 1080p -> 720p -> 480p -> 360p)
+        val entries = qualityUrls.entries.toList()
+        val chosenIndex = when (preset) {
+            SpaceCompressionPreset.ORIGINAL -> 0
+            SpaceCompressionPreset.BALANCED -> (entries.size / 3).coerceIn(0, entries.lastIndex)
+            SpaceCompressionPreset.SERIES_SAVER -> ((entries.size * 2) / 3).coerceIn(0, entries.lastIndex)
+            SpaceCompressionPreset.ULTRA_ECO -> entries.lastIndex
+        }
+        val chosen = entries[chosenIndex]
+        val chosenSize = qualitySizesBytes[chosen.key] ?: 0L
+        return SelectedCompressedStream(
+            qualityLabel = "${chosen.key} (-${preset.savingsPercent}%)",
+            streamUrl = chosen.value,
+            originalHdBytes = highestSize,
+            targetVariantBytes = chosenSize
+        )
+    }
+}
 
 /**
  * Manages real background HTTP video downloads into app-scoped storage and persists
- * download progress & lifecycle state in Room via [DownloadDao].
+ * download progress, space compression metadata, & lifecycle state in Room via [DownloadDao].
  */
 class OfflineDownloadManager(
     private val context: Context,
@@ -76,19 +157,28 @@ class OfflineDownloadManager(
         }
     }
 
-    fun startOrResumeDownload(movie: Movie, quality: String, wifiOnly: Boolean) {
-        if (!movie.isDownloadable) return
+    fun startOrResumeDownload(
+        movie: Movie,
+        quality: String,
+        wifiOnly: Boolean,
+        overrideStreamUrl: String? = null,
+        originalHdBytes: Long = 0L,
+        compressionMode: String = SpaceCompressionPreset.SERIES_SAVER.id
+    ) {
+        val targetUrl = overrideStreamUrl?.takeIf { it.isNotBlank() } ?: movie.videoUrl
+        if (!movie.isDownloadable || targetUrl.isBlank()) return
         if (activeJobs[movie.id]?.isActive == true) return
 
         pauseFlags.remove(movie.id)
         deleteFlags.remove(movie.id)
 
-        val job = scope.launch {
-            val finalFile = getFinalFile(movie.id)
-            val partFile = getPartFile(movie.id)
-            val existingEntity = downloadDao.getDownload(movie.id)
+        val downloadMovie = if (targetUrl != movie.videoUrl) movie.copy(videoUrl = targetUrl) else movie
 
-            // If file is already complete on disk, ensure Room reflects COMPLETED
+        val job = scope.launch {
+            val finalFile = getFinalFile(downloadMovie.id)
+            val partFile = getPartFile(downloadMovie.id)
+            val existingEntity = downloadDao.getDownload(downloadMovie.id)
+
             if (existingEntity?.status == DownloadStatus.COMPLETED &&
                 finalFile.exists() &&
                 finalFile.length() > 0L
@@ -106,14 +196,19 @@ class OfflineDownloadManager(
 
             downloadDao.saveDownload(
                 DownloadEntity(
-                    movieId = movie.id,
-                    title = movie.title,
-                    posterUrl = movie.posterUrl,
-                    videoUrl = movie.videoUrl,
+                    movieId = downloadMovie.id,
+                    title = downloadMovie.title,
+                    posterUrl = downloadMovie.posterUrl,
+                    videoUrl = targetUrl,
                     localFilePath = finalFile.absolutePath,
                     quality = quality,
                     fileSizeBytes = initialTotal,
                     downloadedBytes = existingPartBytes,
+                    originalSizeBytes = originalHdBytes.takeIf { it > 0L }
+                        ?: existingEntity?.originalSizeBytes
+                        ?: 0L,
+                    compressionMode = compressionMode,
+                    mediaType = downloadMovie.mediaType,
                     status = DownloadStatus.QUEUED,
                     progressPercent = initialPercent,
                     errorMessage = null,
@@ -128,29 +223,29 @@ class OfflineDownloadManager(
                 } else {
                     "Aucune connexion Internet disponible."
                 }
-                downloadDao.updateStatus(movie.id, DownloadStatus.FAILED, msg)
+                downloadDao.updateStatus(downloadMovie.id, DownloadStatus.FAILED, msg)
                 return@launch
             }
 
             try {
-                executeStreamingDownload(movie, partFile, finalFile)
+                executeStreamingDownload(downloadMovie, partFile, finalFile)
             } catch (ce: CancellationException) {
                 when {
-                    deleteFlags.remove(movie.id) == true -> {
+                    deleteFlags.remove(downloadMovie.id) == true -> {
                         partFile.delete()
                         finalFile.delete()
-                        downloadDao.deleteDownload(movie.id)
+                        downloadDao.deleteDownload(downloadMovie.id)
                     }
-                    pauseFlags.remove(movie.id) == true -> {
+                    pauseFlags.remove(downloadMovie.id) == true -> {
                         val savedBytes = if (partFile.exists()) partFile.length() else 0L
-                        val currentTotal = downloadDao.getDownload(movie.id)?.fileSizeBytes ?: 0L
+                        val currentTotal = downloadDao.getDownload(downloadMovie.id)?.fileSizeBytes ?: 0L
                         val pct = if (currentTotal > 0L) {
                             ((savedBytes * 100L) / currentTotal).toInt().coerceIn(0, 99)
                         } else {
                             0
                         }
                         downloadDao.updateProgress(
-                            movieId = movie.id,
+                            movieId = downloadMovie.id,
                             downloadedBytes = savedBytes,
                             fileSizeBytes = currentTotal,
                             progressPercent = pct,
@@ -162,16 +257,16 @@ class OfflineDownloadManager(
             } catch (e: Exception) {
                 val reason = e.localizedMessage?.take(120) ?: "Erreur réseau pendant le téléchargement"
                 downloadDao.updateStatus(
-                    movieId = movie.id,
+                    movieId = downloadMovie.id,
                     status = DownloadStatus.FAILED,
                     errorMessage = reason
                 )
             } finally {
-                activeJobs.remove(movie.id)
+                activeJobs.remove(downloadMovie.id)
             }
         }
 
-        activeJobs[movie.id] = job
+        activeJobs[downloadMovie.id] = job
     }
 
     private suspend fun executeStreamingDownload(

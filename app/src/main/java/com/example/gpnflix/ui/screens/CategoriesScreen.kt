@@ -1,7 +1,6 @@
 package com.example.gpnflix.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,19 +22,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -44,8 +41,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.gpnflix.data.model.MediaContentType
 import com.example.gpnflix.data.model.Movie
 import com.example.gpnflix.ui.components.CategoryChip
 import com.example.gpnflix.ui.components.MovieCard
@@ -57,17 +56,13 @@ fun CategoriesScreen(
     onMovieClick: (Movie) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val categories = viewModel.categories
-    var selectedCategoryId by remember { mutableStateOf("all") }
-    val allMovies = viewModel.allMovies
-
-    val filteredMovies = remember(selectedCategoryId, allMovies) {
-        if (selectedCategoryId == "all") allMovies
-        else allMovies.filter { it.category.equals(selectedCategoryId, ignoreCase = true) }
-    }
+    val categories by viewModel.categoriesState.collectAsStateWithLifecycle()
+    val selectedCategoryId by viewModel.selectedCategoryId.collectAsStateWithLifecycle()
+    val categoryMovies by viewModel.categoryMoviesState.collectAsStateWithLifecycle()
+    val isLoadingCategory by viewModel.isLoadingCategory.collectAsStateWithLifecycle()
 
     val selectedCategoryItem = remember(selectedCategoryId, categories) {
-        categories.find { it.id == selectedCategoryId } ?: categories.first()
+        categories.find { it.id == selectedCategoryId } ?: categories.firstOrNull()
     }
 
     Scaffold(
@@ -80,7 +75,6 @@ fun CategoriesScreen(
                 .padding(innerPadding)
                 .statusBarsPadding()
         ) {
-            // Header
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
@@ -97,100 +91,131 @@ fun CategoriesScreen(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Explorez des genres variés, tous vérifiés et 100% autorisés",
+                    text = "Collections officielles et genres disponibles en direct",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-            // Category Banner Card
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(110.dp)
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(selectedCategoryItem.bannerUrl)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.horizontalGradient(
-                                    colors = listOf(
-                                        Color.Black.copy(alpha = 0.85f),
-                                        Color.Black.copy(alpha = 0.4f)
+            if (selectedCategoryItem != null) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(110.dp)
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        val bannerUrl = selectedCategoryItem.bannerUrl.ifBlank {
+                            categoryMovies.firstOrNull { it.backdropUrl.isNotBlank() }?.backdropUrl.orEmpty()
+                        }
+                        if (bannerUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(bannerUrl)
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.horizontalGradient(
+                                        colors = listOf(
+                                            Color.Black.copy(alpha = 0.88f),
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                                        )
                                     )
                                 )
+                        )
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .padding(16.dp)
+                        ) {
+                            Text(
+                                text = selectedCategoryItem.name,
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 18.sp
+                                ),
+                                color = Color.White
                             )
-                    )
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .padding(16.dp)
-                    ) {
-                        Text(
-                            text = selectedCategoryItem.name,
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp
-                            ),
-                            color = Color.White
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = selectedCategoryItem.description,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.8f),
-                            maxLines = 1
-                        )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = selectedCategoryItem.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.85f),
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Category Selector Chips
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(categories, key = { it.id }) { cat ->
-                    CategoryChip(
-                        label = cat.name,
-                        isSelected = selectedCategoryId == cat.id,
-                        onClick = { selectedCategoryId = cat.id }
-                    )
+            if (categories.isNotEmpty()) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(categories, key = { it.id }) { cat ->
+                        CategoryChip(
+                            label = cat.name,
+                            isSelected = selectedCategoryId == cat.id,
+                            onClick = { viewModel.selectCategory(cat) }
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            if (isLoadingCategory) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
 
-            // Grid of Movies in this category
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(135.dp),
-                contentPadding = PaddingValues(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("categories_movie_grid")
-            ) {
-                items(filteredMovies, key = { it.id }) { movie ->
-                    MovieCard(
-                        movie = movie,
-                        onClick = { onMovieClick(movie) }
+            Spacer(modifier = Modifier.height(6.dp))
+
+            if (isLoadingCategory && categoryMovies.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
+            } else if (categoryMovies.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "Aucun film disponible dans cette catégorie pour le moment.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(24.dp)
                     )
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(135.dp),
+                    contentPadding = PaddingValues(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("categories_movie_grid")
+                ) {
+                    items(categoryMovies, key = { it.id }) { movie ->
+                        MovieCard(
+                            movie = movie,
+                            onClick = { onMovieClick(movie) },
+                            aspectRatio = if (movie.mediaType == MediaContentType.MUSIC) 1.0f else 0.68f
+                        )
+                    }
                 }
             }
         }

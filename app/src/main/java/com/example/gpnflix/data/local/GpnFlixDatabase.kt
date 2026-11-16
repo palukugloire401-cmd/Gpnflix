@@ -12,7 +12,7 @@ import androidx.room.RoomDatabase
         FavoriteEntity::class,
         DownloadEntity::class
     ],
-    version = 2,
+    version = 4,
     exportSchema = false
 )
 abstract class GpnFlixDatabase : RoomDatabase() {
